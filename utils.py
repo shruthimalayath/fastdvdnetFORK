@@ -10,7 +10,7 @@ from random import choices # requires Python >= 3.6
 import numpy as np
 import cv2
 import torch
-from skimage.measure.simple_metrics import compare_psnr
+from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from tensorboardX import SummaryWriter
 
 IMAGETYPES = ('*.bmp', '*.png', '*.jpg', '*.jpeg', '*.tif') # Supported image types
@@ -142,8 +142,9 @@ def open_image(fpath, gray_mode, expand_if_needed=False, expand_axis0=True, norm
 		# from HxWxC to CxHxW, RGB image
 		img = (cv2.cvtColor(img, cv2.COLOR_BGR2RGB)).transpose(2, 0, 1)
 	else:
-		# from HxWxC to  CxHxW grayscale image (C=1)
+		# from HxWxC to CxHxW grayscale image (C=1)
 		img = cv2.imread(fpath, cv2.IMREAD_GRAYSCALE)
+		img = np.expand_dims(img, 0)
 
 	if expand_axis0:
 		img = np.expand_dims(img, 0)
