@@ -39,7 +39,7 @@ def normalize_augment(datain, ctrl_fr_idx):
 		rot270_flipud = lambda x: torch.flip(torch.rot90(x, k=3, dims=[2, 3]), dims=[2])
 		rot270_flipud.__name__ = 'rot270_flipud'
 		add_csnt = lambda x: x + torch.normal(mean=torch.zeros(x.size()[0], 1, 1, 1), \
-								 std=(5/255.)).expand_as(x).to(x.device)
+								 std=(5/16383.)).expand_as(x).to(x.device)
 		add_csnt.__name__ = 'add_csnt'
 
 		# define transformations and their frequency, then pick one.
@@ -53,8 +53,15 @@ def normalize_augment(datain, ctrl_fr_idx):
 
 	img_train = datain
 	# convert to [N, num_frames*C. H, W] in  [0., 1.] from [N, num_frames, C. H, W] in [0., 255.]
+	#img_train = img_train.view(img_train.size()[0], -1, \
+							   #img_train.size()[-2], img_train.size()[-1]) / 255.
+	
+
+	# convert to [N, num_frames*C. H, W] in  [0., 1.] from [N, num_frames, C. H, W] in [0., 16383.]
 	img_train = img_train.view(img_train.size()[0], -1, \
-							   img_train.size()[-2], img_train.size()[-1]) / 255.
+							   img_train.size()[-2], img_train.size()[-1]) / 16383.
+	
+
 
 	#augment
 	img_train = transform(img_train)
@@ -143,8 +150,11 @@ def open_image(fpath, gray_mode, expand_if_needed=False, expand_axis0=True, norm
 		img = (cv2.cvtColor(img, cv2.COLOR_BGR2RGB)).transpose(2, 0, 1)
 	else:
 		# from HxWxC to CxHxW grayscale image (C=1)
-		img = cv2.imread(fpath, cv2.IMREAD_GRAYSCALE)
-		img = np.expand_dims(img, 0)
+		#img = cv2.imread(fpath, cv2.IMREAD_GRAYSCALE)
+
+		img = cv2.imread(fpath, cv2.IMREAD_UNCHANGED)
+		img = np.stack([img, img, img], axis=0)
+		#img = np.expand_dims(img, 0)
 
 	if expand_axis0:
 		img = np.expand_dims(img, 0)
@@ -175,6 +185,7 @@ def open_image(fpath, gray_mode, expand_if_needed=False, expand_axis0=True, norm
 
 	if normalize_data:
 		img = normalize(img)
+	print("single image shape =", img.shape)
 	return img, expanded_h, expanded_w
 
 def batch_psnr(img, imclean, data_range):
@@ -218,14 +229,16 @@ def variable_to_cv2_image(invar, conv_rgb_to_bgr=True):
 			res = invar.data.cpu().numpy()[0, 0, :]
 		else:
 			res = invar.data.cpu().numpy()[0, :]
-		res = (res*255.).clip(0, 255).astype(np.uint8)
+		#res = (res*255.).clip(0, 255).astype(np.uint8)
+		res = (res*16383.).clip(0, 16383).astype(np.uint16)
 	elif nchannels == 3:
 		if size4:
 			res = invar.data.cpu().numpy()[0]
 		else:
 			res = invar.data.cpu().numpy()
 		res = res.transpose(1, 2, 0)
-		res = (res*255.).clip(0, 255).astype(np.uint8)
+		#res = (res*255.).clip(0, 255).astype(np.uint8)
+		res = (res*16383.).clip(0, 16383).astype(np.uint16)
 		if conv_rgb_to_bgr:
 			res = cv2.cvtColor(res, cv2.COLOR_RGB2BGR)
 	else:
@@ -296,7 +309,8 @@ def normalize(data):
 	Args:
 		data: a unint8 numpy array to normalize from [0, 255] to [0, 1]
 	"""
-	return np.float32(data/255.)
+	#return np.float32(data/255.)
+	return np.float32(data/16383.)
 
 def svd_orthogonalization(lyr):
 	r"""Applies regularization to the training by performing the

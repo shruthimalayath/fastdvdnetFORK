@@ -7,10 +7,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from models import FastDVDnet
-from dataset import ValDataset
-from dataloaders import train_dali_loader
+from dataset_val_paired import PairedValDataset
+#from dataloaders import train_dali_loader
+from dataset_paired import PairedThermalDataset
+from torch.utils.data import DataLoader
 from utils import svd_orthogonalization, close_logger, init_logging, normalize_augment
-from train_common import resume_training, lr_scheduler, log_train_psnr, \
+from train_common_paired import resume_training, lr_scheduler, log_train_psnr, \
 					validate_and_log, save_model_checkpoint
 
 def main(**args):
@@ -19,14 +21,31 @@ def main(**args):
 
 	# Load dataset
 	print('> Loading datasets ...')
-	dataset_val = ValDataset(valsetdir=args['valset_dir'], gray_mode=False)
-	loader_train = train_dali_loader(batch_size=args['batch_size'],\
-									file_root=args['trainset_dir'],\
-									sequence_length=args['temp_patch_size'],\
-									crop_size=args['patch_size'],\
-									epoch_size=args['max_number_patches'],\
-									random_shuffle=True,\
-									temp_stride=3)
+	dataset_val = PairedValDataset( noisy_root=args['val_noisy_dir'], clean_root=args['val_clean_dir'])
+	#loader_train = train_dali_loader(batch_size=args['batch_size'],\
+									#file_root=args['trainset_dir'],\
+									#sequence_length=args['temp_patch_size'],\
+									#crop_size=args['patch_size'],\
+									#epoch_size=args['max_number_patches'],\
+									#random_shuffle=True,\
+									#temp_stride=3)
+	#change
+	dataset_train = PairedThermalDataset(
+    noisy_root=args['train_noisy_dir'],
+    clean_root=args['train_clean_dir'],
+    patch_size=args['patch_size'],
+    temp_patch_size=args['temp_patch_size'],
+    epoch_size=args['max_number_patches']
+	)
+
+	loader_train = DataLoader(
+		dataset_train,
+		batch_size=args['batch_size'],
+		shuffle=True,
+		num_workers=4,
+		pin_memory=True
+	)
+
 
 	num_minibatches = int(args['max_number_patches']//args['batch_size'])
 	ctrl_fr_idx = (args['temp_patch_size'] - 1) // 2
@@ -76,32 +95,64 @@ def main(**args):
 			# When optimizer = optim.Optimizer(net.parameters()) we only zero the optim's grads
 			optimizer.zero_grad()
 
+			#OLD
 			# convert inp to [N, num_frames*C. H, W] in  [0., 1.] from [N, num_frames, C. H, W] in [0., 255.]
 			# extract ground truth (central frame)
-			img_train, gt_train = normalize_augment(data[0]['data'], ctrl_fr_idx)
-			N, _, H, W = img_train.size()
-
+			#img_train, gt_train = normalize_augment(data[0]['data'], ctrl_fr_idx)
+			#N, _, H, W = img_train.size()
 			# std dev of each sequence
-			stdn = torch.empty((N, 1, 1, 1)).cuda().uniform_(args['noise_ival'][0], to=args['noise_ival'][1])
-
-
+			#stdn = torch.empty((N, 1, 1, 1)).cuda().uniform_(args['noise_ival'][0], to=args['noise_ival'][1])
 			# draw noise samples from std dev tensor
-			noise = torch.zeros_like(img_train)
-			noise = torch.normal(mean=noise, std=stdn.expand_as(noise))
-
-			# poisson noise - need to change noise_sigma 
-			#peak = torch.empty((N,1,1,1)).uniform_(2000, 10000)
-			#scaled = img_train * peak
-			#imgn_train = torch.poisson(scaled) / peak
-
+			#noise = torch.zeros_like(img_train)
+			#noise = torch.normal(mean=noise, std=stdn.expand_as(noise))
 			#define noisy input
-			imgn_train = img_train + noise
+			#imgn_train = img_train + noise
 
+			#NEW
+			noisy_seq, clean_seq = data
+			N = noisy_seq.shape[0]
+
+			imgn_train = noisy_seq.view(
+				N,
+				-1,
+				noisy_seq.shape[-2],
+				noisy_seq.shape[-1]
+			)
+
+			clean_seq = clean_seq.view(
+				N,
+				-1,
+				clean_seq.shape[-2],
+				clean_seq.shape[-1]
+			)
+
+			H = imgn_train.shape[-2]
+			W = imgn_train.shape[-1]
+
+			gt_train = clean_seq[:, 6:9, :, :]
 			# Send tensors to GPU
 			gt_train = gt_train.cuda(non_blocking=True)
 			imgn_train = imgn_train.cuda(non_blocking=True)
-			noise = noise.cuda(non_blocking=True)
-			noise_map = stdn.expand((N, 1, H, W)).cuda(non_blocking=True) # one channel per image
+
+			#old noise maps
+			#noise = noise.cuda(non_blocking=True)
+			#noise_map = stdn.expand((N, 1, H, W)).cuda(non_blocking=True) # one channel per image
+
+			gt_train = gt_train.cuda(non_blocking=True)
+
+			#temporary fix: FastDVDnet expects a noise map, but we don't have one for the paired dataset. So we will create a dummy noise map with a fixed value of 30/16383.0 (which is the same as the default noise level used in the original FastDVDnet paper).
+			#noise_map = torch.full(
+				#(N, 1, H, W),
+				#30.0 / 16383.0,
+				#device=imgn_train.device
+			#)
+
+			#dynamic noise map
+			noise_map = torch.full(
+				(N, 1, H, W),
+				args['val_noiseL'],  # Use the validation noise level
+				device=imgn_train.device
+			)
 
 			# Evaluate model and optimize it
 			out_train = model(imgn_train, noise_map)
@@ -142,7 +193,7 @@ def main(**args):
 						epoch=epoch, \
 						lr=current_lr, \
 						logger=logger, \
-						trainimg=img_train
+						trainimg=imgn_train
 						)
 
 		# save model and checkpoint
@@ -190,10 +241,14 @@ if __name__ == "__main__":
 	# Dirs
 	parser.add_argument("--log_dir", type=str, default="logs", \
 					 help='path of log files')
-	parser.add_argument("--trainset_dir", type=str, default=None, \
-					 help='path of trainset')
-	parser.add_argument("--valset_dir", type=str, default=None, \
-						 help='path of validation set')
+	#parser.add_argument("--trainset_dir", type=str, default=None, help='path of trainset')
+
+	#added arguments for paired dataset
+	parser.add_argument("--train_noisy_dir", type=str, required=True, help = "path to the directory containing noisy training images")
+	parser.add_argument("--train_clean_dir", type=str, required=True, help = "path to the directory containing clean training images")
+
+	parser.add_argument("--val_noisy_dir", type=str, default=None, help='path to the directory containing noisy validation images')
+	parser.add_argument("--val_clean_dir", type=str, default=None, help='path to the directory containing clean validation images')
 	argspar = parser.parse_args()
 
 	# For 8-bit images, normalize noise between [0, 1]

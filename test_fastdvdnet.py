@@ -15,7 +15,7 @@ from utils import batch_psnr, init_logger_test, \
 
 NUM_IN_FR_EXT = 5 # temporal size of patch
 MC_ALGO = 'DeepFlow' # motion estimation algorithm
-OUTIMGEXT = '.png' # output images format
+OUTIMGEXT = '.tif' # output images format
 
 def save_out_seq(seqnoisy, seqclean, save_dir, sigmaval, suffix, save_noisy):
 	"""Saves the denoised and noisy sequences under save_dir
@@ -95,12 +95,15 @@ def test_fastdvdnet(**args):
 									expand_if_needed=False,\
 									max_num_fr=args['max_num_fr_per_seq'])
 		seq = torch.from_numpy(seq).to(device)
+		#print("seq shape =", seq.shape) #DEBUG LINE
 		seq_time = time.time()
 
 		# Add noise
 		noise = torch.empty_like(seq).normal_(mean=0, std=args['noise_sigma']).to(device)
 		seqn = seq + noise
 		noisestd = torch.FloatTensor([args['noise_sigma']]).to(device)
+
+		#print("channels =", seq.shape[1]) #DEBUG LINE
 
 		denframes = denoise_seq_fastdvdnet(seq=seqn,\
 										noise_std=noisestd,\
@@ -122,8 +125,12 @@ def test_fastdvdnet(**args):
 	# Save outputs
 	if not args['dont_save_results']:
 		# Save sequence
+		#save_out_seq(seqn, denframes, args['save_path'], \
+					   #int(args['noise_sigma']*255), args['suffix'], args['save_noisy'])
+		
+		# For 14-bit images, save sequence
 		save_out_seq(seqn, denframes, args['save_path'], \
-					   int(args['noise_sigma']*255), args['suffix'], args['save_noisy'])
+					   int(args['noise_sigma']*16383), args['suffix'], args['save_noisy'])
 
 	# close logger
 	close_logger(logger)
@@ -150,7 +157,10 @@ if __name__ == "__main__":
 
 	argspar = parser.parse_args()
 	# Normalize noises ot [0, 1]
-	argspar.noise_sigma /= 255.
+	#argspar.noise_sigma /= 255.
+
+	# For 14-bit, normalize noises ot [0, 1]
+	argspar.noise_sigma /= 16383.
 
 	# use CUDA?
 	argspar.cuda = not argspar.no_gpu and torch.cuda.is_available()
