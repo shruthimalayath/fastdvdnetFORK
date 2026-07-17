@@ -9,7 +9,9 @@ import torch
 import numpy as np
 from torch.utils.data import Dataset
 
-
+# Loads a dataset of paired thermal images for validation. 
+# The dataset consists of noisy and clean thermal image sequences stored in separate
+# Different from dataset_paired.py, because this doesn't random cropping or patch extraction, but instead loads the entire sequence of frames for each sample.
 class PairedValDataset(Dataset):
     def __init__(self, noisy_root, clean_root, max_num_fr=15):
 

@@ -8,42 +8,52 @@ import torch.nn as nn
 import torch.optim as optim
 from models import FastDVDnet
 from dataset_val_paired import PairedValDataset
-#from dataloaders import train_dali_loader
-from dataset_paired import PairedThermalDataset
+from dataloaders_paired import train_dali_loader
+#from dataset_paired import PairedThermalDataset
 from torch.utils.data import DataLoader
 from utils import svd_orthogonalization, close_logger, init_logging, normalize_augment
 from train_common_paired import resume_training, lr_scheduler, log_train_psnr, \
 					validate_and_log, save_model_checkpoint
 
+
+#NEED TO ADD NORMALIZATIOON BACK IN, AUGMENTATION, AND NOISE MAP GENERATION FOR THE PAIRED DATASET
+
+# Differences from original train_fastdvdnet.py: 
+# 1. The dataset is loaded from a paired dataset of noisy and clean thermal images, instead of using a DALI loader.
+# 2. The noise map is generated dynamically based on the validation noise level, instead of using a fixed value.
+# 3. The training loop is modified to handle the paired dataset, with the noisy and clean sequences being loaded separately and processed accordingly.
+# 4. The validation and logging functions are modified to handle the paired dataset, with the noisy and clean sequences being passed separately to the model for evaluation.
+
+
 def main(**args):
+
+	#previous change: Load dataset NOT with dali, with custom dataset class for paired thermal images
+	#--------------------------------------------------------------------------------------------------
+	#dataset_val = PairedValDataset( noisy_root=args['val_noisy_dir'], clean_root=args['val_clean_dir'])
+	#loader_train = train_dali_loader(batch_size=args['batch_size'],\#file_root=args['trainset_dir'],\#sequence_length=args['temp_patch_size'],\#crop_size=args['patch_size'],\#epoch_size=args['max_number_patches'],\#random_shuffle=True,\#temp_stride=3)
+	#dataset_train = PairedThermalDataset(#noisy_root=args['train_noisy_dir'],#clean_root=args['train_clean_dir'],patch_size=args['patch_size'],#temp_patch_size=args['temp_patch_size'],#epoch_size=args['max_number_patches'])
+	#loader_train = DataLoader(#dataset_train,#batch_size=args['batch_size'],#shuffle=True,#num_workers=4,#pin_memory=True#)
+	#-------------------------------------------------------------------------------------------------
+
+
 	r"""Performs the main training loop
 	"""
-
-	# Load dataset
 	print('> Loading datasets ...')
-	dataset_val = PairedValDataset( noisy_root=args['val_noisy_dir'], clean_root=args['val_clean_dir'])
-	#loader_train = train_dali_loader(batch_size=args['batch_size'],\
-									#file_root=args['trainset_dir'],\
-									#sequence_length=args['temp_patch_size'],\
-									#crop_size=args['patch_size'],\
-									#epoch_size=args['max_number_patches'],\
-									#random_shuffle=True,\
-									#temp_stride=3)
-	#change
-	dataset_train = PairedThermalDataset(
-    noisy_root=args['train_noisy_dir'],
-    clean_root=args['train_clean_dir'],
-    patch_size=args['patch_size'],
-    temp_patch_size=args['temp_patch_size'],
-    epoch_size=args['max_number_patches']
-	)
 
-	loader_train = DataLoader(
-		dataset_train,
+	dataset_val = PairedValDataset(
+		 noisy_root=args['val_noisy_dir'],
+		 clean_root=args['val_clean_dir']
+	) 
+
+	loader_train = train_dali_loader(
 		batch_size=args['batch_size'],
-		shuffle=True,
-		num_workers=4,
-		pin_memory=True
+		noisy_root=args['train_noisy_dir'],
+		clean_root=args['train_clean_dir'],
+		sequence_length=args['temp_patch_size'],
+		crop_size=args['patch_size'],
+		epoch_size=args['max_number_patches'],
+		random_shuffle=False,
+		temp_stride=3
 	)
 
 
@@ -108,23 +118,16 @@ def main(**args):
 			#define noisy input
 			#imgn_train = img_train + noise
 
-			#NEW
-			noisy_seq, clean_seq = data
+			#NEW: 2 frames: noisy and clean, from the paired dataset; 
+			# per sample noise standard deviation computed from the residual
+
+			noisy_seq= data[0]["noisy"]
+			clean_seq= data[1]["clean"]
+
 			N = noisy_seq.shape[0]
 
-			imgn_train = noisy_seq.view(
-				N,
-				-1,
-				noisy_seq.shape[-2],
-				noisy_seq.shape[-1]
-			)
-
-			clean_seq = clean_seq.view(
-				N,
-				-1,
-				clean_seq.shape[-2],
-				clean_seq.shape[-1]
-			)
+			imgn_train = noisy_seq.view(N, -1, noisy_seq.shape[-2],noisy_seq.shape[-1])
+			clean_seq = clean_seq.view(N, -1, clean_seq.shape[-2], clean_seq.shape[-1])
 
 			H = imgn_train.shape[-2]
 			W = imgn_train.shape[-1]
@@ -134,25 +137,29 @@ def main(**args):
 			gt_train = gt_train.cuda(non_blocking=True)
 			imgn_train = imgn_train.cuda(non_blocking=True)
 
+			noisy_central = imgn_train[:, 6:9, :, :]
+			residual = noisy_central - gt_train					
+			sigma = residual.view(N, -1).std(dim=1, unbiased=False)
+			sigma = sigma.clamp(min=1e-6).view(N, 1, 1, 1)
+
+			noise_map = sigma.expand(N, 1, H, W)
+
 			#old noise maps
 			#noise = noise.cuda(non_blocking=True)
 			#noise_map = stdn.expand((N, 1, H, W)).cuda(non_blocking=True) # one channel per image
 
-			gt_train = gt_train.cuda(non_blocking=True)
 
-			#temporary fix: FastDVDnet expects a noise map, but we don't have one for the paired dataset. So we will create a dummy noise map with a fixed value of 30/16383.0 (which is the same as the default noise level used in the original FastDVDnet paper).
+
+			#temporary fix: FastDVDnet expects a noise map, but we don't have one for the paired dataset. 
+			#So we will create a dummy noise map with a fixed value of 30/16383.0 
 			#noise_map = torch.full(
 				#(N, 1, H, W),
 				#30.0 / 16383.0,
 				#device=imgn_train.device
 			#)
 
-			#dynamic noise map
-			noise_map = torch.full(
-				(N, 1, H, W),
-				args['val_noiseL'],  # Use the validation noise level
-				device=imgn_train.device
-			)
+			#use val noise (old)
+			#noise_map = torch.full((N, 1, H, W), args['val_noiseL'],   device=imgn_train.device)
 
 			# Evaluate model and optimize it
 			out_train = model(imgn_train, noise_map)
@@ -231,13 +238,11 @@ if __name__ == "__main__":
 						help="Number of training epochs to save state")
 	parser.add_argument("--noise_ival", nargs=2, type=int, default=[5, 55], \
 					 help="Noise training interval")
-	parser.add_argument("--val_noiseL", type=float, default=25, \
-						help='noise level used on validation set')
+	#parser.add_argument("--val_noiseL", type=float, default=25, help='noise level used on validation set')  no longer needed, because we will compute the noise level dynamically based on the validation set
 	# Preprocessing parameters
 	parser.add_argument("--patch_size", "--p", type=int, default=96, help="Patch size")
 	parser.add_argument("--temp_patch_size", "--tp", type=int, default=5, help="Temporal patch size")
-	parser.add_argument("--max_number_patches", "--m", type=int, default=256000, \
-						help="Maximum number of patches")
+	parser.add_argument("--max_number_patches", "--m", type=int, default=256000, help="Maximum number of patches")
 	# Dirs
 	parser.add_argument("--log_dir", type=str, default="logs", \
 					 help='path of log files')
@@ -256,10 +261,10 @@ if __name__ == "__main__":
 	#argspar.noise_ival[0] /= 255.
 	#argspar.noise_ival[1] /= 255.
 
-	#For 16-bit images, normalize noise between [0, 1]
-	argspar.val_noiseL /= 16383.                     
-	argspar.noise_ival[0] /= 16383.
-	argspar.noise_ival[1] /= 16383.
+	#For 16-bit images, normalize noise between [0, 1] -- not needed anymore, because we will compute the noise level dynamically based on the validation set
+	#argspar.val_noiseL /= 16383.                     
+	#argspar.noise_ival[0] /= 16383.
+	#argspar.noise_ival[1] /= 16383.
 
 	print("\n### Training FastDVDnet denoiser model ###")
 	print("> Parameters:")

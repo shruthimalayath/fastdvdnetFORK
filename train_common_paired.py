@@ -8,6 +8,7 @@ import torchvision.utils as tutils
 from utils import batch_psnr
 from fastdvdnet import denoise_seq_fastdvdnet
 
+#Changes from original train_common.py to add paired validation (validate_and_log function changed)
 def	resume_training(argdict, model, optimizer):
 	""" Resumes previous training or starts anew
 	"""
@@ -102,9 +103,10 @@ def save_model_checkpoint(model, argdict, optimizer, train_pars, epoch):
 	del save_dict
 
 #changes here to add paired validation
-def validate_and_log(model_temp, dataset_val, valnoisestd, temp_psz, writer, \
+def validate_and_log(model_temp, dataset_val, temp_psz, writer, \
 					 epoch, lr, logger, trainimg):
-	"""Validation step after the epoch finished
+	"""Validation step after the epoch finished.
+	Noise level is computed dynamically from the residual between noisy and clean images.
 	"""
 	t1 = time.time()
 	psnr_val = 0
@@ -115,7 +117,16 @@ def validate_and_log(model_temp, dataset_val, valnoisestd, temp_psz, writer, \
 			#seqn_val = seqn_val.cuda()
 			seqn_val = noisy_val.cuda()
 			clean_val = clean_val.cuda()
-			sigma_noise = torch.cuda.FloatTensor([valnoisestd])
+
+			#sigma_noise = torch.cuda.FloatTensor([valnoisestd])
+			ctrl_idx = seqn_val.size(0) // 2  # central frame index if the sequence is full length
+			
+			noisy_central = seqn_val[ctrl_idx]
+			clean_central = clean_val[ctrl_idx]
+			residual = noisy_central - clean_central
+			sigma_noise = residual.view(-1).std(unbiased=False).clamp(min=1e-6)
+			sigma_noise = sigma_noise.view(1, 1, 1, 1)
+
 			out_val = denoise_seq_fastdvdnet(seq=seqn_val, \
 											noise_std=sigma_noise, \
 											temp_psz=temp_psz,\
