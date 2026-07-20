@@ -89,11 +89,6 @@ def main(**args):
 			noise = torch.zeros_like(img_train)
 			noise = torch.normal(mean=noise, std=stdn.expand_as(noise))
 
-			# poisson noise - need to change noise_sigma 
-			#peak = torch.empty((N,1,1,1)).uniform_(2000, 10000)
-			#scaled = img_train * peak
-			#imgn_train = torch.poisson(scaled) / peak
-
 			#define noisy input
 			imgn_train = img_train + noise
 
@@ -185,6 +180,8 @@ if __name__ == "__main__":
 	# Preprocessing parameters
 	parser.add_argument("--patch_size", "--p", type=int, default=96, help="Patch size")
 	parser.add_argument("--temp_patch_size", "--tp", type=int, default=5, help="Temporal patch size")
+
+	#changed default from 256000 to 384000 to match paper
 	parser.add_argument("--max_number_patches", "--m", type=int, default=256000, \
 						help="Maximum number of patches")
 	# Dirs

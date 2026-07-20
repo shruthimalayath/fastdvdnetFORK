@@ -7,8 +7,8 @@ def main():
 
     loader = train_dali_loader(
         batch_size=2,
-        noisy_root=r"C:\Users\SMalayat\MLDenoisingProject\data\vid3_cropped",
-        clean_root=r"C:\Users\SMalayat\MLDenoisingProject\data\vid3_cropped\processed",
+        noisy_root=r"/mnt/data/users/smalayath/noisy",
+        clean_root=r"/mnt/data/users/smalayath/clean",
         sequence_length=5,
         crop_size=96,
         epoch_size=10,

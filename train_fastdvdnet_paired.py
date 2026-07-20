@@ -8,15 +8,14 @@ import torch.nn as nn
 import torch.optim as optim
 from models import FastDVDnet
 from dataset_val_paired import PairedValDataset
-from dataloaders_paired import train_dali_loader
-#from dataset_paired import PairedThermalDataset
+#from dataloaders_paired import train_dali_loader
+from dataset_paired import PairedThermalDataset
 from torch.utils.data import DataLoader
 from utils import svd_orthogonalization, close_logger, init_logging, normalize_augment
 from train_common_paired import resume_training, lr_scheduler, log_train_psnr, \
 					validate_and_log, save_model_checkpoint
 
 
-#NEED TO ADD NORMALIZATIOON BACK IN, AUGMENTATION, AND NOISE MAP GENERATION FOR THE PAIRED DATASET
 
 # Differences from original train_fastdvdnet.py: 
 # 1. The dataset is loaded from a paired dataset of noisy and clean thermal images, instead of using a DALI loader.
@@ -33,8 +32,18 @@ def main(**args):
 	#loader_train = train_dali_loader(batch_size=args['batch_size'],\#file_root=args['trainset_dir'],\#sequence_length=args['temp_patch_size'],\#crop_size=args['patch_size'],\#epoch_size=args['max_number_patches'],\#random_shuffle=True,\#temp_stride=3)
 	#dataset_train = PairedThermalDataset(#noisy_root=args['train_noisy_dir'],#clean_root=args['train_clean_dir'],patch_size=args['patch_size'],#temp_patch_size=args['temp_patch_size'],#epoch_size=args['max_number_patches'])
 	#loader_train = DataLoader(#dataset_train,#batch_size=args['batch_size'],#shuffle=True,#num_workers=4,#pin_memory=True#)
+	#loader_train = DataLoader(#dataset_train,#batch_size=args['batch_size'],#shuffle=True,#num_workers=4,#pin_memory=True#)
+	#loader_train = train_dali_loader(
+		#batch_size=args['batch_size'],
+		#noisy_root=args['train_noisy_dir'],
+		#clean_root=args['train_clean_dir'],
+		#sequence_length=args['temp_patch_size'],
+		#crop_size=args['patch_size'],
+		#epoch_size=args['max_number_patches'],
+		#random_shuffle=False,
+		#temp_stride=3
+	#)
 	#-------------------------------------------------------------------------------------------------
-
 
 	r"""Performs the main training loop
 	"""
@@ -45,15 +54,13 @@ def main(**args):
 		 clean_root=args['val_clean_dir']
 	) 
 
-	loader_train = train_dali_loader(
-		batch_size=args['batch_size'],
+
+	dataset_train = PairedThermalDataset(
 		noisy_root=args['train_noisy_dir'],
 		clean_root=args['train_clean_dir'],
-		sequence_length=args['temp_patch_size'],
-		crop_size=args['patch_size'],
-		epoch_size=args['max_number_patches'],
-		random_shuffle=False,
-		temp_stride=3
+		patch_size=args['patch_size'],
+		temp_patch_size=args['temp_patch_size'],
+		epoch_size=args['max_number_patches']
 	)
 
 
@@ -119,7 +126,7 @@ def main(**args):
 			#imgn_train = img_train + noise
 
 			#NEW: 2 frames: noisy and clean, from the paired dataset; 
-			# per sample noise standard deviation computed from the residual
+			#per sample noise standard deviation computed from the residual
 
 			noisy_seq= data[0]["noisy"]
 			clean_seq= data[1]["clean"]
@@ -236,19 +243,23 @@ if __name__ == "__main__":
 						orthogonalization")
 	parser.add_argument("--save_every_epochs", type=int, default=5,\
 						help="Number of training epochs to save state")
-	parser.add_argument("--noise_ival", nargs=2, type=int, default=[5, 55], \
-					 help="Noise training interval")
-	#parser.add_argument("--val_noiseL", type=float, default=25, help='noise level used on validation set')  no longer needed, because we will compute the noise level dynamically based on the validation set
+
+	#No longer needed because of dynamic noise maps
+	#parser.add_argument("--noise_ival", nargs=2, type=int, default=[5, 55], help="Noise training interval")
+	#parser.add_argument("--val_noiseL", type=float, default=25, help='noise level used on validation set')  
+
+
 	# Preprocessing parameters
 	parser.add_argument("--patch_size", "--p", type=int, default=96, help="Patch size")
 	parser.add_argument("--temp_patch_size", "--tp", type=int, default=5, help="Temporal patch size")
 	parser.add_argument("--max_number_patches", "--m", type=int, default=256000, help="Maximum number of patches")
+	
+	
 	# Dirs
-	parser.add_argument("--log_dir", type=str, default="logs", \
-					 help='path of log files')
+	parser.add_argument("--log_dir", type=str, default="logs", help='path of log files')
 	#parser.add_argument("--trainset_dir", type=str, default=None, help='path of trainset')
 
-	#added arguments for paired dataset
+	#Paths to paired dataset
 	parser.add_argument("--train_noisy_dir", type=str, required=True, help = "path to the directory containing noisy training images")
 	parser.add_argument("--train_clean_dir", type=str, required=True, help = "path to the directory containing clean training images")
 
