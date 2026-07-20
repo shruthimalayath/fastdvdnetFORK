@@ -102,68 +102,146 @@ def save_model_checkpoint(model, argdict, optimizer, train_pars, epoch):
 		torch.save(save_dict, os.path.join(argdict['log_dir'], 'ckpt_e{}.pth'.format(epoch+1)))
 	del save_dict
 
-#changes here to add paired validation
-def validate_and_log(model_temp, dataset_val, temp_psz, writer, \
-					 epoch, lr, logger, trainimg):
-	"""Validation step after the epoch finished.
-	Noise level is computed dynamically from the residual between noisy and clean images.
-	"""
-	t1 = time.time()
-	psnr_val = 0
-	with torch.no_grad():
-		for noisy_val, clean_val in dataset_val:
+#new validate_and_log function for pair processing
+def validate_and_log(model_temp, dataset_val, temp_psz, writer,
+                     epoch, lr, logger, trainimg):
+    """Validation step after each epoch."""
+    t1 = time.time()
+    psnr_val = 0.0
+
+    with torch.no_grad():
+        for noisy_val, clean_val in dataset_val:
+            noisy_val = noisy_val.float().cuda(non_blocking=True)
+            clean_val = clean_val.float().cuda(non_blocking=True)
+
+            # Normalize to [0, 1]
+            noisy_val = noisy_val / 255.0
+            clean_val = clean_val / 255.0
+
+            # Use the center frame of the validation sequence
+            ctrl_fr_idx = noisy_val.size(0) // 2
+            noisy_central = noisy_val[ctrl_fr_idx]
+            clean_central = clean_val[ctrl_fr_idx]
+
+            # Estimate the per-sample noise level from the residual
+            residual = noisy_central - clean_central
+            sigma = residual.view(1, -1).std(dim=1, unbiased=False)
+            sigma = sigma.clamp(min=1e-6).view(1, 1, 1, 1)
+            noise_map = sigma.cuda(non_blocking=True)
+
+            # Denoise the full sequence
+            out_val = denoise_seq_fastdvdnet(
+                seq=noisy_val,
+                noise_std=noise_map,
+                temp_psz=temp_psz,
+                model_temporal=model_temp,
+            )
+
+            psnr_val += batch_psnr(out_val.cpu(), clean_val.cpu(), 1.)
+
+        psnr_val /= len(dataset_val)
+        t2 = time.time()
+        print("\n[epoch %d] PSNR_val: %.4f, on %.2f sec" % (epoch + 1, psnr_val, (t2 - t1)))
+        writer.add_scalar('PSNR on validation data', psnr_val, epoch)
+        writer.add_scalar('Learning rate', lr, epoch)
+
+    # Log images from the last validation batch
+    try:
+        idx = 0
+        if epoch == 0:
+            _, _, Ht, Wt = trainimg.size()
+            img = tutils.make_grid(
+                trainimg.view(-1, 3, Ht, Wt),
+                nrow=8, normalize=True, scale_each=True
+            )
+            writer.add_image('Training patches', img, epoch)
+
+            img_clean = tutils.make_grid(
+                clean_val.data[idx].clamp(0., 1.),
+                nrow=2, normalize=False, scale_each=False
+            )
+            img_noisy = tutils.make_grid(
+                noisy_val.data[idx].clamp(0., 1.),
+                nrow=2, normalize=False, scale_each=False
+            )
+            writer.add_image('Clean validation image {}'.format(idx), img_clean, epoch)
+            writer.add_image('Noisy validation image {}'.format(idx), img_noisy, epoch)
+
+        irecon = tutils.make_grid(
+            out_val.data[idx].clamp(0., 1.),
+            nrow=2, normalize=False, scale_each=False
+        )
+        writer.add_image('Reconstructed validation image {}'.format(idx), irecon, epoch)
+
+    except Exception as e:
+        logger.error("validate_and_log_temporal(): Couldn't log results, {}".format(e))
+
+
+
+
+
+
+#def validate_and_log(model_temp, dataset_val, temp_psz, writer, \
+					 #epoch, lr, logger, trainimg):
+	#Validation step after the epoch finished.
+	#Noise level is computed dynamically from the residual between noisy and clean images.
+	
+	#t1 = time.time()
+	#psnr_val = 0
+	#with torch.no_grad():
+		#for noisy_val, clean_val in dataset_val:
 			#noise = torch.FloatTensor(seq_val.size()).normal_(mean=0, std=valnoisestd)
 			#seqn_val = seq_val + noise
 			#seqn_val = seqn_val.cuda()
-			seqn_val = noisy_val.cuda()
-			clean_val = clean_val.cuda()
+			#seqn_val = noisy_val.cuda()
+			#clean_val = clean_val.cuda()
 
 			#sigma_noise = torch.cuda.FloatTensor([valnoisestd])
-			ctrl_idx = seqn_val.size(0) // 2  # central frame index if the sequence is full length
+			#ctrl_idx = seqn_val.size(0) // 2  # central frame index if the sequence is full length
 			
-			noisy_central = seqn_val[ctrl_idx]
-			clean_central = clean_val[ctrl_idx]
-			residual = noisy_central - clean_central
-			sigma_noise = residual.view(-1).std(unbiased=False).clamp(min=1e-6)
-			sigma_noise = sigma_noise.view(1, 1, 1, 1)
+			#noisy_central = seqn_val[ctrl_idx]
+			#clean_central = clean_val[ctrl_idx]
+			#residual = noisy_central - clean_central
+			#sigma_noise = residual.view(-1).std(unbiased=False).clamp(min=1e-6)
+			#sigma_noise = sigma_noise.view(1, 1, 1, 1)
 
-			out_val = denoise_seq_fastdvdnet(seq=seqn_val, \
-											noise_std=sigma_noise, \
-											temp_psz=temp_psz,\
-											model_temporal=model_temp)
+			#out_val = denoise_seq_fastdvdnet(seq=seqn_val, \
+											#noise_std=sigma_noise, \
+											#temp_psz=temp_psz,\
+											#model_temporal=model_temp)
 			#psnr_val += batch_psnr(out_val.cpu(), seq_val.squeeze_(), 1.)
-			psnr_val += batch_psnr(out_val.cpu(), clean_val.cpu(), 1.)
-		psnr_val /= len(dataset_val)
-		t2 = time.time()
-		print("\n[epoch %d] PSNR_val: %.4f, on %.2f sec" % (epoch+1, psnr_val, (t2-t1)))
-		writer.add_scalar('PSNR on validation data', psnr_val, epoch)
-		writer.add_scalar('Learning rate', lr, epoch)
+			#psnr_val += batch_psnr(out_val.cpu(), clean_val.cpu(), 1.)
+		#psnr_val /= len(dataset_val)
+		#t2 = time.time()
+		#print("\n[epoch %d] PSNR_val: %.4f, on %.2f sec" % (epoch+1, psnr_val, (t2-t1)))
+		#writer.add_scalar('PSNR on validation data', psnr_val, epoch)
+		#writer.add_scalar('Learning rate', lr, epoch)
 
 	# Log val images
-	try:
-		idx = 0
-		if epoch == 0:
+	#try:
+		#idx = 0
+		#if epoch == 0:
 
 			# Log training images
-			_, _, Ht, Wt = trainimg.size()
-			img = tutils.make_grid(trainimg.view(-1, 3, Ht, Wt), \
-								   nrow=8, normalize=True, scale_each=True)
-			writer.add_image('Training patches', img, epoch)
+			#_, _, Ht, Wt = trainimg.size()
+			#img = tutils.make_grid(trainimg.view(-1, 3, Ht, Wt), \
+								   #nrow=8, normalize=True, scale_each=True)
+			#writer.add_image('Training patches', img, epoch)
 
 			# Log validation images
 			#img = tutils.make_grid(seq_val.data[idx].clamp(0., 1.),nrow=2, normalize=False, scale_each=False)
 			
-			img = tutils.make_grid(clean_val.data[idx].clamp(0., 1.), nrow=2, normalize=False, scale_each=False)
+			#img = tutils.make_grid(clean_val.data[idx].clamp(0., 1.), nrow=2, normalize=False, scale_each=False)
 
-			imgn = tutils.make_grid(seqn_val.data[idx].clamp(0., 1.),\
-									nrow=2, normalize=False, scale_each=False)
-			writer.add_image('Clean validation image {}'.format(idx), img, epoch)
-			writer.add_image('Noisy validation image {}'.format(idx), imgn, epoch)
+			#imgn = tutils.make_grid(seqn_val.data[idx].clamp(0., 1.),\
+									#nrow=2, normalize=False, scale_each=False)
+			#writer.add_image('Clean validation image {}'.format(idx), img, epoch)
+			#writer.add_image('Noisy validation image {}'.format(idx), imgn, epoch)
 
 		# Log validation results
-		irecon = tutils.make_grid(out_val.data[idx].clamp(0., 1.),\
-								nrow=2, normalize=False, scale_each=False)
-		writer.add_image('Reconstructed validation image {}'.format(idx), irecon, epoch)
+		#irecon = tutils.make_grid(out_val.data[idx].clamp(0., 1.),\
+								#nrow=2, normalize=False, scale_each=False)
+		#writer.add_image('Reconstructed validation image {}'.format(idx), irecon, epoch)
 
-	except Exception as e:
-		logger.error("validate_and_log_temporal(): Couldn't log results, {}".format(e))
+	#except Exception as e:
+		#logger.error("validate_and_log_temporal(): Couldn't log results, {}".format(e))

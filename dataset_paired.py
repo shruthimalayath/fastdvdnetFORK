@@ -28,8 +28,10 @@ class PairedThermalDataset(Dataset):
         seq = random.choice(self.sequences)
         noisy_dir = os.path.join(self.noisy_root, seq)
         clean_dir = os.path.join(self.clean_root, seq)
-        noisy_files = sorted(glob.glob(os.path.join(noisy_dir, "*.tif")))
-        clean_files = sorted(glob.glob(os.path.join(clean_dir, "*.tif")))
+        #noisy_files = sorted(glob.glob(os.path.join(noisy_dir, "*.tif")))
+        #clean_files = sorted(glob.glob(os.path.join(clean_dir, "*.tif")))
+        noisy_files = sorted(glob.glob(os.path.join(noisy_dir, "*.jpg")))
+        clean_files = sorted(glob.glob(os.path.join(clean_dir, "*.jpg")))
         center = random.randint(2, len(noisy_files)-3)
 
         noisy_frames = []
@@ -55,14 +57,16 @@ class PairedThermalDataset(Dataset):
         noisy_crop = np.stack(noisy_crop)
         clean_crop = np.stack(clean_crop)
 
-        #14-bit: normalize to [0, 1] and replicate to 3 channels
-        #noisy_crop = noisy_crop.astype(np.float32)/16383.0
-        #clean_crop = clean_crop.astype(np.float32)/16383.0
-
-        #8-bit: normalize to [0, 1] and replicate to 3 channels
-        noisy_crop = noisy_crop.astype(np.float32)/255.0
-        clean_crop = clean_crop.astype(np.float32)/255.0
-
         noisy_crop = np.repeat(noisy_crop[:, None, :, :], 3, axis=1)
         clean_crop = np.repeat(clean_crop[:, None, :, :], 3, axis=1)
-        return (torch.from_numpy(noisy_crop), torch.from_numpy(clean_crop))
+
+        #for RGB training #1 -----------------------------------------------
+        #during training clean & noise sequences both point to the same clean directory
+        #noise is added here; each temporal window of 5 gets a random Gaussian noise value
+        sigma = random.uniform(5, 55)
+        noise = np.random.randn(*clean_crop.shape) * sigma
+        noisy_crop = clean_crop.astype(np.float32) + noise
+        noisy_crop = np.clip(noisy_crop, 0, 255)
+        #------------------------------------------------------------------
+
+        return (torch.from_numpy(noisy_crop).float(), torch.from_numpy(clean_crop).float())

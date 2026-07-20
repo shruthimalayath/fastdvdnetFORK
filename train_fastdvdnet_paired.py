@@ -11,7 +11,7 @@ from dataset_val_paired import PairedValDataset
 #from dataloaders_paired import train_dali_loader
 from dataset_paired import PairedThermalDataset
 from torch.utils.data import DataLoader
-from utils import svd_orthogonalization, close_logger, init_logging, normalize_augment
+from utils import svd_orthogonalization, close_logger, init_logging, normalize_augment_pair
 from train_common_paired import resume_training, lr_scheduler, log_train_psnr, \
 					validate_and_log, save_model_checkpoint
 
@@ -54,13 +54,20 @@ def main(**args):
 		 clean_root=args['val_clean_dir']
 	) 
 
-
 	dataset_train = PairedThermalDataset(
 		noisy_root=args['train_noisy_dir'],
 		clean_root=args['train_clean_dir'],
 		patch_size=args['patch_size'],
 		temp_patch_size=args['temp_patch_size'],
 		epoch_size=args['max_number_patches']
+	)
+
+	loader_train = DataLoader(
+		dataset_train,
+		batch_size=args['batch_size'],
+		shuffle=True,
+		num_workers=4,
+		pin_memory=True
 	)
 
 
@@ -112,7 +119,7 @@ def main(**args):
 			# When optimizer = optim.Optimizer(net.parameters()) we only zero the optim's grads
 			optimizer.zero_grad()
 
-			#OLD
+			#OLD --------------------------------------------------------------------------------------------
 			# convert inp to [N, num_frames*C. H, W] in  [0., 1.] from [N, num_frames, C. H, W] in [0., 255.]
 			# extract ground truth (central frame)
 			#img_train, gt_train = normalize_augment(data[0]['data'], ctrl_fr_idx)
@@ -124,49 +131,51 @@ def main(**args):
 			#noise = torch.normal(mean=noise, std=stdn.expand_as(noise))
 			#define noisy input
 			#imgn_train = img_train + noise
-
-			#NEW: 2 frames: noisy and clean, from the paired dataset; 
-			#per sample noise standard deviation computed from the residual
-
-			noisy_seq= data[0]["noisy"]
-			clean_seq= data[1]["clean"]
-
-			N = noisy_seq.shape[0]
-
-			imgn_train = noisy_seq.view(N, -1, noisy_seq.shape[-2],noisy_seq.shape[-1])
-			clean_seq = clean_seq.view(N, -1, clean_seq.shape[-2], clean_seq.shape[-1])
-
-			H = imgn_train.shape[-2]
-			W = imgn_train.shape[-1]
-
-			gt_train = clean_seq[:, 6:9, :, :]
+			#--------------------------------------------------------------------------------------------
+		
+			# Without any augmentation or normalization -------------------------------------------------
+			# N = noisy_seq.shape[0]
+			#imgn_train = noisy_seq.view(N, -1, noisy_seq.shape[-2],noisy_seq.shape[-1])
+			#clean_seq = clean_seq.view(N, -1, clean_seq.shape[-2], clean_seq.shape[-1])
+			#H = imgn_train.shape[-2]
+			#W = imgn_train.shape[-1]
+			#gt_train = clean_seq[:, 6:9, :, :]
 			# Send tensors to GPU
-			gt_train = gt_train.cuda(non_blocking=True)
+			#gt_train = gt_train.cuda(non_blocking=True)
+			#imgn_train = imgn_train.cuda(non_blocking=True)
+			#noisy_central = imgn_train[:, 6:9, :, :]
+			#residual = noisy_central - gt_train					
+			#sigma = residual.view(N, -1).std(dim=1, unbiased=False)
+			#sigma = sigma.clamp(min=1e-6).view(N, 1, 1, 1)
+			#noise_map = sigma.expand(N, 1, H, W)
+			#--------------------------------------------------------------------------------------------
+
+			#NEW: 2 frames: noisy and clean, from the paired dataset, per sample noise STD computed from the residual, dual aug&norm
+
+			# get paired noisy/clean sequences
+			noisy_seq, clean_seq = data
+
+			# normalize + apply SAME augmentation to noisy and clean
+			imgn_train, gt_train = normalize_augment_pair(noisy_seq, clean_seq, ctrl_fr_idx)
+			N, _, H, W = imgn_train.size()
+
+			# move to GPU
 			imgn_train = imgn_train.cuda(non_blocking=True)
+			gt_train = gt_train.cuda(non_blocking=True)
 
-			noisy_central = imgn_train[:, 6:9, :, :]
-			residual = noisy_central - gt_train					
-			sigma = residual.view(N, -1).std(dim=1, unbiased=False)
+			# center noisy frame
+			noisy_central = imgn_train[:,3*ctrl_fr_idx:3*ctrl_fr_idx+3,:,:]
+
+			# estimate noise level from paired data
+			residual = noisy_central - gt_train
+			sigma = residual.view(N, -1).std(dim=1,unbiased=False)
 			sigma = sigma.clamp(min=1e-6).view(N, 1, 1, 1)
+			noise_map = sigma.expand(N,1,H,W).cuda(non_blocking=True)
 
-			noise_map = sigma.expand(N, 1, H, W)
 
-			#old noise maps
+			#old noise maps-------------------------------------------------------------------------
 			#noise = noise.cuda(non_blocking=True)
 			#noise_map = stdn.expand((N, 1, H, W)).cuda(non_blocking=True) # one channel per image
-
-
-
-			#temporary fix: FastDVDnet expects a noise map, but we don't have one for the paired dataset. 
-			#So we will create a dummy noise map with a fixed value of 30/16383.0 
-			#noise_map = torch.full(
-				#(N, 1, H, W),
-				#30.0 / 16383.0,
-				#device=imgn_train.device
-			#)
-
-			#use val noise (old)
-			#noise_map = torch.full((N, 1, H, W), args['val_noiseL'],   device=imgn_train.device)
 
 			# Evaluate model and optimize it
 			out_train = model(imgn_train, noise_map)
@@ -199,16 +208,15 @@ def main(**args):
 
 		# Validation and log images
 		validate_and_log(
-						model_temp=model, \
-						dataset_val=dataset_val, \
-						valnoisestd=args['val_noiseL'], \
-						temp_psz=args['temp_patch_size'], \
-						writer=writer, \
-						epoch=epoch, \
-						lr=current_lr, \
-						logger=logger, \
-						trainimg=imgn_train
-						)
+			model_temp=model,
+			dataset_val=dataset_val,
+			temp_psz=args['temp_patch_size'],
+			writer=writer,
+			epoch=epoch,
+			lr=current_lr,
+			logger=logger,
+			trainimg=imgn_train
+		)
 
 		# save model and checkpoint
 		training_params['start_epoch'] = epoch + 1
@@ -267,15 +275,10 @@ if __name__ == "__main__":
 	parser.add_argument("--val_clean_dir", type=str, default=None, help='path to the directory containing clean validation images')
 	argspar = parser.parse_args()
 
-	# For 8-bit images, normalize noise between [0, 1]
+	# For 8-bit images, normalize noise between [0, 1] 
 	#argspar.val_noiseL /= 255.                     
 	#argspar.noise_ival[0] /= 255.
 	#argspar.noise_ival[1] /= 255.
-
-	#For 16-bit images, normalize noise between [0, 1] -- not needed anymore, because we will compute the noise level dynamically based on the validation set
-	#argspar.val_noiseL /= 16383.                     
-	#argspar.noise_ival[0] /= 16383.
-	#argspar.noise_ival[1] /= 16383.
 
 	print("\n### Training FastDVDnet denoiser model ###")
 	print("> Parameters:")

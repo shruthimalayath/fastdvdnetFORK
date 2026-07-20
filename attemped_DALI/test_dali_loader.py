@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 
-from dataloaders_paired import train_dali_loader
+from attemped_DALI.dataloaders_paired import train_dali_loader
 
 
 def main():

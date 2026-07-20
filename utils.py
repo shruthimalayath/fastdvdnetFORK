@@ -15,6 +15,54 @@ from tensorboardX import SummaryWriter
 
 IMAGETYPES = ('*.bmp', '*.png', '*.jpg', '*.jpeg', '*.tif') # Supported image types
 
+
+#Normalization & augmentation for pairs: ensures same transformations are applied to both
+def normalize_augment_pair(noisy_seq, clean_seq, ctrl_fr_idx):
+    """
+    Args:
+        noisy_seq: [N, num_frames, C, H, W]
+        clean_seq: [N, num_frames, C, H, W]
+
+    Returns:
+        imgn_train: [N, num_frames*C, H, W]
+        gt_train:   [N, 3, H, W]
+    """
+
+    def get_transform():
+        aug_list = [
+            lambda x: x,
+            lambda x: torch.flip(x, dims=[2]),
+            lambda x: torch.rot90(x, k=1, dims=[2, 3]),
+            lambda x: torch.flip(torch.rot90(x, k=1, dims=[2, 3]), dims=[2]),
+            lambda x: torch.rot90(x, k=2, dims=[2, 3]),
+            lambda x: torch.flip(torch.rot90(x, k=2, dims=[2, 3]), dims=[2]),
+            lambda x: torch.rot90(x, k=3, dims=[2, 3]),
+            lambda x: torch.flip(torch.rot90(x, k=3, dims=[2, 3]), dims=[2]),
+        ]
+
+        w_aug = [32, 12, 12, 12, 12, 12, 12, 12]
+        return choices(aug_list, w_aug)[0]
+
+    # normalize
+    noisy_seq = noisy_seq.float() / 255.
+    clean_seq = clean_seq.float() / 255.
+
+    # flatten temporal dimension
+    noisy_seq = noisy_seq.view(noisy_seq.size(0),-1,noisy_seq.size(-2),noisy_seq.size(-1))
+    clean_seq = clean_seq.view(clean_seq.size(0),-1,clean_seq.size(-2),clean_seq.size(-1))
+
+    # choose one augmentation
+    transf = get_transform()
+
+    # apply same augmentation to both
+    noisy_seq = transf(noisy_seq)
+    clean_seq = transf(clean_seq)
+
+    # extract clean center frame
+    gt_train = clean_seq[ :,3*ctrl_fr_idx:3*ctrl_fr_idx+3,:,:]
+
+    return noisy_seq, gt_train
+
 def normalize_augment(datain, ctrl_fr_idx):
 	'''Normalizes and augments an input patch of dim [N, num_frames, C. H, W] in [0., 255.] to \
 		[N, num_frames*C. H, W] in  [0., 1.]. It also returns the central frame of the temporal \
@@ -39,7 +87,7 @@ def normalize_augment(datain, ctrl_fr_idx):
 		rot270_flipud = lambda x: torch.flip(torch.rot90(x, k=3, dims=[2, 3]), dims=[2])
 		rot270_flipud.__name__ = 'rot270_flipud'
 		add_csnt = lambda x: x + torch.normal(mean=torch.zeros(x.size()[0], 1, 1, 1), \
-								 std=(5/16383.)).expand_as(x).to(x.device)
+								 std=(5/255.)).expand_as(x).to(x.device)
 		add_csnt.__name__ = 'add_csnt'
 
 		# define transformations and their frequency, then pick one.
@@ -59,7 +107,7 @@ def normalize_augment(datain, ctrl_fr_idx):
 
 	# convert to [N, num_frames*C. H, W] in  [0., 1.] from [N, num_frames, C. H, W] in [0., 16383.]
 	img_train = img_train.view(img_train.size()[0], -1, \
-							   img_train.size()[-2], img_train.size()[-1]) / 16383.
+							   img_train.size()[-2], img_train.size()[-1]) / 255.
 	
 
 
@@ -229,16 +277,16 @@ def variable_to_cv2_image(invar, conv_rgb_to_bgr=True):
 			res = invar.data.cpu().numpy()[0, 0, :]
 		else:
 			res = invar.data.cpu().numpy()[0, :]
-		#res = (res*255.).clip(0, 255).astype(np.uint8)
-		res = (res*16383.).clip(0, 16383).astype(np.uint16)
+		res = (res*255.).clip(0, 255).astype(np.uint8)
+		#res = (res*16383.).clip(0, 16383).astype(np.uint16)
 	elif nchannels == 3:
 		if size4:
 			res = invar.data.cpu().numpy()[0]
 		else:
 			res = invar.data.cpu().numpy()
 		res = res.transpose(1, 2, 0)
-		#res = (res*255.).clip(0, 255).astype(np.uint8)
-		res = (res*16383.).clip(0, 16383).astype(np.uint16)
+		res = (res*255.).clip(0, 255).astype(np.uint8)
+		#res = (res*16383.).clip(0, 16383).astype(np.uint16)
 		if conv_rgb_to_bgr:
 			res = cv2.cvtColor(res, cv2.COLOR_RGB2BGR)
 	else:
@@ -309,8 +357,8 @@ def normalize(data):
 	Args:
 		data: a unint8 numpy array to normalize from [0, 255] to [0, 1]
 	"""
-	#return np.float32(data/255.)
-	return np.float32(data/16383.)
+	return np.float32(data/255.)
+	#return np.float32(data/16383.)
 
 def svd_orthogonalization(lyr):
 	r"""Applies regularization to the training by performing the
