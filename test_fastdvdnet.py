@@ -130,7 +130,7 @@ def test_fastdvdnet(**args):
 		
 		# For 14-bit images, save sequence
 		save_out_seq(seqn, denframes, args['save_path'], \
-					   int(args['noise_sigma']*16383), args['suffix'], args['save_noisy'])
+					   int(args['noise_sigma']*255), args['suffix'], args['save_noisy'])
 
 	# close logger
 	close_logger(logger)
@@ -160,7 +160,7 @@ if __name__ == "__main__":
 	#argspar.noise_sigma /= 255.
 
 	# For 14-bit, normalize noises ot [0, 1]
-	argspar.noise_sigma /= 16383.
+	argspar.noise_sigma /= 255.
 
 	# use CUDA?
 	argspar.cuda = not argspar.no_gpu and torch.cuda.is_available()

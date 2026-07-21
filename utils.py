@@ -109,8 +109,6 @@ def normalize_augment(datain, ctrl_fr_idx):
 	img_train = img_train.view(img_train.size()[0], -1, \
 							   img_train.size()[-2], img_train.size()[-1]) / 255.
 	
-
-
 	#augment
 	img_train = transform(img_train)
 

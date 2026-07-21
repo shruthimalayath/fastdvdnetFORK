@@ -26,7 +26,8 @@ from train_common_paired import resume_training, lr_scheduler, log_train_psnr, \
 
 def main(**args):
 
-	#previous change: Load dataset NOT with dali, with custom dataset class for paired thermal images
+	
+	#Previous changes/versions
 	#--------------------------------------------------------------------------------------------------
 	#dataset_val = PairedValDataset( noisy_root=args['val_noisy_dir'], clean_root=args['val_clean_dir'])
 	#loader_train = train_dali_loader(batch_size=args['batch_size'],\#file_root=args['trainset_dir'],\#sequence_length=args['temp_patch_size'],\#crop_size=args['patch_size'],\#epoch_size=args['max_number_patches'],\#random_shuffle=True,\#temp_stride=3)
@@ -45,6 +46,8 @@ def main(**args):
 	#)
 	#-------------------------------------------------------------------------------------------------
 
+
+	#Load dataset NOT with dali, but with custom dataset class for paired thermal images
 	r"""Performs the main training loop
 	"""
 	print('> Loading datasets ...')
@@ -115,7 +118,6 @@ def main(**args):
 
 			# Pre-training step
 			model.train()
-
 			# When optimizer = optim.Optimizer(net.parameters()) we only zero the optim's grads
 			optimizer.zero_grad()
 
