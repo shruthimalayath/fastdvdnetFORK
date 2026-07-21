@@ -47,9 +47,12 @@ def normalize_augment_pair(noisy_seq, clean_seq, ctrl_fr_idx):
     noisy_seq = noisy_seq.float() / 255.
     clean_seq = clean_seq.float() / 255.
 
-    # flatten temporal dimension
-    noisy_seq = noisy_seq.view(noisy_seq.size(0),-1,noisy_seq.size(-2),noisy_seq.size(-1))
-    clean_seq = clean_seq.view(clean_seq.size(0),-1,clean_seq.size(-2),clean_seq.size(-1))
+    noisy_seq = noisy_seq.reshape(noisy_seq.size(0), -1, noisy_seq.size(-2), noisy_seq.size(-1))
+    clean_seq = clean_seq.reshape(clean_seq.size(0), -1, clean_seq.size(-2), clean_seq.size(-1))
+
+    # flatten temporal dimension: issue continguous vs non contiguous tensor
+    #noisy_seq = noisy_seq.view(noisy_seq.size(0),-1,noisy_seq.size(-2),noisy_seq.size(-1))
+    #clean_seq = clean_seq.view(clean_seq.size(0),-1,clean_seq.size(-2),clean_seq.size(-1))
 
     # choose one augmentation
     transf = get_transform()

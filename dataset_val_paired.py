@@ -60,14 +60,18 @@ class PairedValDataset(Dataset):
         noisy_seq = np.stack(noisy_frames, axis=0)
         clean_seq = np.stack(clean_frames, axis=0)
 
-        # convert:
-        # [F,H,W] -> [F,3,H,W]
-        noisy_seq = np.repeat( noisy_seq[:, None, :, :], 3, axis=1)
-        clean_seq = np.repeat( clean_seq[:, None, :, :], 3, axis=1)
+        # convert: [F,H,W] -> [F,3,H,W] for thermal
+        #noisy_seq = np.repeat( noisy_seq[:, None, :, :], 3, axis=1)
+        #clean_seq = np.repeat( clean_seq[:, None, :, :], 3, axis=1)
 
         #for RGB training #1 -----------------------------------------------
         #during training clean & noise sequences both point to the same clean directory
         #noise is added here; each temporal window of 5 gets a random Gaussian noise value
+
+        noisy_crop = noisy_crop.transpose(0, 3, 1, 2)
+        clean_crop = clean_crop.transpose(0, 3, 1, 2)
+
+
         sigma = random.uniform(5, 55)
         noise = np.random.randn(*clean_seq.shape) * sigma
         noisy_seq = clean_seq.astype(np.float32) + noise

@@ -40,7 +40,10 @@ class PairedThermalDataset(Dataset):
         for i in range(center-2, center+3):
             noisy = cv2.imread(noisy_files[i], cv2.IMREAD_UNCHANGED)
             clean = cv2.imread(clean_files[i], cv2.IMREAD_UNCHANGED)
-            H, W = noisy.shape
+
+
+            H, W = noisy.shape[:2] #for RGB
+            #H, W = noisy.shape   # for thermal
             noisy_frames.append(noisy)
             clean_frames.append(clean)
 
@@ -57,16 +60,21 @@ class PairedThermalDataset(Dataset):
         noisy_crop = np.stack(noisy_crop)
         clean_crop = np.stack(clean_crop)
 
-        noisy_crop = np.repeat(noisy_crop[:, None, :, :], 3, axis=1)
-        clean_crop = np.repeat(clean_crop[:, None, :, :], 3, axis=1)
+        #noisy_crop = np.repeat(noisy_crop[:, None, :, :], 3, axis=1)  #for thermal
+        #clean_crop = np.repeat(clean_crop[:, None, :, :], 3, axis=1)  #for thermal
 
         #for RGB training #1 -----------------------------------------------
         #during training clean & noise sequences both point to the same clean directory
         #noise is added here; each temporal window of 5 gets a random Gaussian noise value
+
+        noisy_crop = noisy_crop.transpose(0, 3, 1, 2)
+        clean_crop = clean_crop.transpose(0, 3, 1, 2)
+
         sigma = random.uniform(5, 55)
         noise = np.random.randn(*clean_crop.shape) * sigma
         noisy_crop = clean_crop.astype(np.float32) + noise
         noisy_crop = np.clip(noisy_crop, 0, 255)
         #------------------------------------------------------------------
 
-        return (torch.from_numpy(noisy_crop).float(), torch.from_numpy(clean_crop).float())
+        return (torch.from_numpy(noisy_crop).float(), torch.from_numpy(clean_crop).float(), torch.tensor(sigma, dtype = torch.float32))
+        #return both crops & sigma value (dont return sigma value for thermal)
