@@ -9,6 +9,9 @@ import random
 # Loads a dataset of paired thermal images for training and evaluation. The dataset consists of noisy and clean thermal image sequences stored in separate directories. 
 # Each sample consists of a sequence of 5 frames, with the center frame being randomly selected from the available frames in the sequence. 
 # The frames are cropped to a specified patch size, and the pixel values are normalized to the range [0, 1]. The resulting crops are returned as PyTorch tensors.
+
+
+#add: check for is sequence is smaller than the temporal patch size 
 class PairedThermalDataset(Dataset):
 
     def __init__(self, noisy_root, clean_root, patch_size=96, temp_patch_size=5, epoch_size=256000):
@@ -38,8 +41,14 @@ class PairedThermalDataset(Dataset):
         clean_frames = []
 
         for i in range(center-2, center+3):
-            noisy = cv2.imread(noisy_files[i], cv2.IMREAD_UNCHANGED)
-            clean = cv2.imread(clean_files[i], cv2.IMREAD_UNCHANGED)
+            #noisy = cv2.imread(noisy_files[i], cv2.IMREAD_UNCHANGED)
+            #clean = cv2.imread(clean_files[i], cv2.IMREAD_UNCHANGED)
+
+            noisy = cv2.imread(nf, cv2.IMREAD_COLOR)
+            clean = cv2.imread(cf, cv2.IMREAD_COLOR)
+
+            noisy = cv2.cvtColor(noisy, cv2.COLOR_BGR2RGB)
+            clean = cv2.cvtColor(clean, cv2.COLOR_BGR2RGB)
 
 
             H, W = noisy.shape[:2] #for RGB
@@ -71,6 +80,7 @@ class PairedThermalDataset(Dataset):
         clean_crop = clean_crop.transpose(0, 3, 1, 2)
 
         sigma = random.uniform(5, 55)
+        clean_seq = clean_seq.astype(np.float32)
         noise = np.random.randn(*clean_crop.shape) * sigma
         noisy_crop = clean_crop.astype(np.float32) + noise
         noisy_crop = np.clip(noisy_crop, 0, 255)
