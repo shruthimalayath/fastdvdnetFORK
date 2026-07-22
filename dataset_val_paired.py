@@ -46,8 +46,14 @@ class PairedValDataset(Dataset):
 
         for nf, cf in zip(noisy_files, clean_files):
 
-            noisy = cv2.imread(nf, cv2.IMREAD_UNCHANGED)
-            clean = cv2.imread(cf, cv2.IMREAD_UNCHANGED)
+            #noisy = cv2.imread(nf, cv2.IMREAD_UNCHANGED)
+            #clean = cv2.imread(cf, cv2.IMREAD_UNCHANGED)
+            
+            noisy = cv2.imread(nf, cv2.IMREAD_COLOR)
+            clean = cv2.imread(cf, cv2.IMREAD_COLOR)
+
+            noisy = cv2.cvtColor(noisy, cv2.COLOR_BGR2RGB)
+            clean = cv2.cvtColor(clean, cv2.COLOR_BGR2RGB)
 
             if noisy is None:
                 raise ValueError(f"Could not read {nf}")
@@ -72,7 +78,9 @@ class PairedValDataset(Dataset):
         clean_seq = clean_seq.transpose(0, 3, 1, 2)
 
 
-        sigma = random.uniform(5, 55)
+        #sigma = random.uniform(5, 55)
+        sigma = 25.0
+        clean_seq = clean_seq.astype(np.float32)
         noise = np.random.randn(*clean_seq.shape) * sigma
         noisy_seq = clean_seq.astype(np.float32) + noise
         noisy_seq = np.clip(noisy_seq, 0, 255)

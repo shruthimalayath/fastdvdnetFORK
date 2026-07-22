@@ -155,7 +155,7 @@ def main(**args):
 			#NEW: 2 frames: noisy and clean, from the paired dataset, per sample noise STD computed from the residual, dual aug&norm
 
 			# get paired noisy/clean sequences
-			noisy_seq, clean_seq = data
+			noisy_seq, clean_seq, sigma_true = data
 
 			# normalize + apply SAME augmentation to noisy and clean
 			imgn_train, gt_train = normalize_augment_pair(noisy_seq, clean_seq, ctrl_fr_idx)
