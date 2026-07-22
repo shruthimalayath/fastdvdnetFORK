@@ -68,8 +68,8 @@ class PairedValDataset(Dataset):
         #during training clean & noise sequences both point to the same clean directory
         #noise is added here; each temporal window of 5 gets a random Gaussian noise value
 
-        noisy_crop = noisy_crop.transpose(0, 3, 1, 2)
-        clean_crop = clean_crop.transpose(0, 3, 1, 2)
+        noisy_seq = noisy_seq.transpose(0, 3, 1, 2)
+        clean_seq = clean_seq.transpose(0, 3, 1, 2)
 
 
         sigma = random.uniform(5, 55)
