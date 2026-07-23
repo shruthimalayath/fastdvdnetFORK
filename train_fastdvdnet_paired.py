@@ -170,7 +170,8 @@ def main(**args):
 
 			# estimate noise level from paired data
 			residual = noisy_central - gt_train
-			sigma = residual.view(N, -1).std(dim=1,unbiased=False)
+			#sigma = residual.view(N, -1).std(dim=1,unbiased=False)
+			sigma = residual.reshape(N,-1).std(dim=1,unbiased=False)
 			sigma = sigma.clamp(min=1e-6).view(N, 1, 1, 1)
 			noise_map = sigma.expand(N,1,H,W).cuda(non_blocking=True)
 

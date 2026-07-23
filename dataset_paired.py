@@ -44,12 +44,11 @@ class PairedThermalDataset(Dataset):
             #noisy = cv2.imread(noisy_files[i], cv2.IMREAD_UNCHANGED)
             #clean = cv2.imread(clean_files[i], cv2.IMREAD_UNCHANGED)
 
-            noisy = cv2.imread(nf, cv2.IMREAD_COLOR)
-            clean = cv2.imread(cf, cv2.IMREAD_COLOR)
-
-            noisy = cv2.cvtColor(noisy, cv2.COLOR_BGR2RGB)
-            clean = cv2.cvtColor(clean, cv2.COLOR_BGR2RGB)
-
+        
+            noisy = cv2.imread(noisy_files[i],cv2.IMREAD_COLOR)
+            clean = cv2.imread(clean_files[i],cv2.IMREAD_COLOR)
+            noisy = cv2.cvtColor(noisy,cv2.COLOR_BGR2RGB)
+            clean = cv2.cvtColor(clean,cv2.COLOR_BGR2RGB)
 
             H, W = noisy.shape[:2] #for RGB
             #H, W = noisy.shape   # for thermal
@@ -80,7 +79,7 @@ class PairedThermalDataset(Dataset):
         clean_crop = clean_crop.transpose(0, 3, 1, 2)
 
         sigma = random.uniform(5, 55)
-        clean_seq = clean_seq.astype(np.float32)
+        clean_crop = clean_crop.astype(np.float32)
         noise = np.random.randn(*clean_crop.shape) * sigma
         noisy_crop = clean_crop.astype(np.float32) + noise
         noisy_crop = np.clip(noisy_crop, 0, 255)
