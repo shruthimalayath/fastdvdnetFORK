@@ -6,10 +6,6 @@ import torch
 import numpy as np
 import random
 
-# Loads a dataset of paired thermal images for training and evaluation. The dataset consists of noisy and clean thermal image sequences stored in separate directories. 
-# Each sample consists of a sequence of 5 frames, with the center frame being randomly selected from the available frames in the sequence. 
-# The frames are cropped to a specified patch size. The resulting crops are returned as PyTorch tensors.
-
 
 #add: check for is sequence is smaller than the temporal patch size 
 class PairedThermalDataset(Dataset):
@@ -61,12 +57,6 @@ class PairedThermalDataset(Dataset):
 
         noisy_crop = np.repeat(noisy_crop[:, None, :, :], 3, axis=1)  #for thermal
         clean_crop = np.repeat(clean_crop[:, None, :, :], 3, axis=1)  #for thermal
-
-        #for RGB training #1 -----------------------------------------------
-        #during training clean & noise sequences both point to the same clean directory
-        #noise is added here; each temporal window of 5 gets a random Gaussian noise value
-        #noisy_crop = noisy_crop.transpose(0, 3, 1, 2)
-        #clean_crop = clean_crop.transpose(0, 3, 1, 2)
 
         return (torch.from_numpy(noisy_crop).float(), torch.from_numpy(clean_crop).float())
         #return both crops & sigma value 

@@ -2,49 +2,23 @@
 Trains a FastDVDnet model.
 """
 import time
+import os, sys
 import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from models import FastDVDnet
-from dataset_val_paired import PairedValDataset
+from dataset_val_paired_thermal import PairedValDataset
 #from dataloaders_paired import train_dali_loader
-from dataset_paired import PairedThermalDataset
+from dataset_paired_thermal import PairedThermalDataset
 from torch.utils.data import DataLoader
-from utils import svd_orthogonalization, close_logger, init_logging, normalize_augment_pair
-from train_common_paired import resume_training, lr_scheduler, log_train_psnr, \
+from utils_thermal import svd_orthogonalization, close_logger, init_logging, normalize_augment_pair
+from train_common_paired_thermal import resume_training, lr_scheduler, log_train_psnr, \
 					validate_and_log, save_model_checkpoint
 
 
 
-# Differences from original train_fastdvdnet.py: 
-# 1. The dataset is loaded from a paired dataset of noisy and clean thermal images, instead of using a DALI loader.
-# 2. The noise map is generated dynamically based on the validation noise level, instead of using a fixed value.
-# 3. The training loop is modified to handle the paired dataset, with the noisy and clean sequences being loaded separately and processed accordingly.
-# 4. The validation and logging functions are modified to handle the paired dataset, with the noisy and clean sequences being passed separately to the model for evaluation.
-
-
 def main(**args):
-
-	
-	#Previous changes/versions
-	#--------------------------------------------------------------------------------------------------
-	#dataset_val = PairedValDataset( noisy_root=args['val_noisy_dir'], clean_root=args['val_clean_dir'])
-	#loader_train = train_dali_loader(batch_size=args['batch_size'],\#file_root=args['trainset_dir'],\#sequence_length=args['temp_patch_size'],\#crop_size=args['patch_size'],\#epoch_size=args['max_number_patches'],\#random_shuffle=True,\#temp_stride=3)
-	#dataset_train = PairedThermalDataset(#noisy_root=args['train_noisy_dir'],#clean_root=args['train_clean_dir'],patch_size=args['patch_size'],#temp_patch_size=args['temp_patch_size'],#epoch_size=args['max_number_patches'])
-	#loader_train = DataLoader(#dataset_train,#batch_size=args['batch_size'],#shuffle=True,#num_workers=4,#pin_memory=True#)
-	#loader_train = DataLoader(#dataset_train,#batch_size=args['batch_size'],#shuffle=True,#num_workers=4,#pin_memory=True#)
-	#loader_train = train_dali_loader(
-		#batch_size=args['batch_size'],
-		#noisy_root=args['train_noisy_dir'],
-		#clean_root=args['train_clean_dir'],
-		#sequence_length=args['temp_patch_size'],
-		#crop_size=args['patch_size'],
-		#epoch_size=args['max_number_patches'],
-		#random_shuffle=False,
-		#temp_stride=3
-	#)
-	#-------------------------------------------------------------------------------------------------
 
 
 	#Load dataset NOT with dali, but with custom dataset class for paired thermal images
@@ -62,7 +36,9 @@ def main(**args):
 		clean_root=args['train_clean_dir'],
 		patch_size=args['patch_size'],
 		temp_patch_size=args['temp_patch_size'],
-		epoch_size=args['max_number_patches']
+		epoch_size=args['max_number_patches'],
+		#preload = True,
+		#progress = True
 	)
 
 	loader_train = DataLoader(
@@ -81,13 +57,14 @@ def main(**args):
 	# Init loggers
 	writer, logger = init_logging(args)
 
-	# Define GPU devices
-	device_ids = [0, 1, 2, 3]
+	# Define GPU devices #
+	device_ids = [0]
 	torch.backends.cudnn.benchmark = True # CUDNN optimization
 
 	# Create model
 	model = FastDVDnet()
-	model = nn.DataParallel(model, device_ids=device_ids).cuda()
+	model = nn.DataParallel(model, device_ids=device_ids).cuda() 
+	#data parallel vs distrubuted (for now do parallel)
 
 	# Define loss
 	criterion = nn.MSELoss(reduction='sum')
@@ -101,7 +78,11 @@ def main(**args):
 
 	# Training
 	start_time = time.time()
+	#print("DEBUG: torch.cuda.device_count()", torch.cuda.device_count())  
+	#print("DEBUG: device_ids variable:", device_ids) 
+	#print("DEBUG: model.device_ids:", getattr(model, "device_ids", None))
 	for epoch in range(start_epoch, args['epochs']):
+		#print(f"DEBUG: start epoch {epoch}")
 		# Set learning rate
 		current_lr, reset_orthog = lr_scheduler(epoch, args)
 		if reset_orthog:
@@ -110,56 +91,27 @@ def main(**args):
 		# set learning rate in optimizer
 		for param_group in optimizer.param_groups:
 			param_group["lr"] = current_lr
-		print('\nlearning rate %f' % current_lr)
+		#print('\nlearning rate %f' % current_lr)
 
 		# train
 
 		for i, data in enumerate(loader_train, 0):
+			#print(f"DEBUG: start batch {i}") 
 
 			# Pre-training step
 			model.train()
 			# When optimizer = optim.Optimizer(net.parameters()) we only zero the optim's grads
 			optimizer.zero_grad()
 
-			#OLD --------------------------------------------------------------------------------------------
-			# convert inp to [N, num_frames*C. H, W] in  [0., 1.] from [N, num_frames, C. H, W] in [0., 255.]
-			# extract ground truth (central frame)
-			#img_train, gt_train = normalize_augment(data[0]['data'], ctrl_fr_idx)
-			#N, _, H, W = img_train.size()
-			# std dev of each sequence
-			#stdn = torch.empty((N, 1, 1, 1)).cuda().uniform_(args['noise_ival'][0], to=args['noise_ival'][1])
-			# draw noise samples from std dev tensor
-			#noise = torch.zeros_like(img_train)
-			#noise = torch.normal(mean=noise, std=stdn.expand_as(noise))
-			#define noisy input
-			#imgn_train = img_train + noise
-			#--------------------------------------------------------------------------------------------
-		
-			# Without any augmentation or normalization -------------------------------------------------
-			# N = noisy_seq.shape[0]
-			#imgn_train = noisy_seq.view(N, -1, noisy_seq.shape[-2],noisy_seq.shape[-1])
-			#clean_seq = clean_seq.view(N, -1, clean_seq.shape[-2], clean_seq.shape[-1])
-			#H = imgn_train.shape[-2]
-			#W = imgn_train.shape[-1]
-			#gt_train = clean_seq[:, 6:9, :, :]
-			# Send tensors to GPU
-			#gt_train = gt_train.cuda(non_blocking=True)
-			#imgn_train = imgn_train.cuda(non_blocking=True)
-			#noisy_central = imgn_train[:, 6:9, :, :]
-			#residual = noisy_central - gt_train					
-			#sigma = residual.view(N, -1).std(dim=1, unbiased=False)
-			#sigma = sigma.clamp(min=1e-6).view(N, 1, 1, 1)
-			#noise_map = sigma.expand(N, 1, H, W)
-			#--------------------------------------------------------------------------------------------
-
 			#NEW: 2 frames: noisy and clean, from the paired dataset, per sample noise STD computed from the residual, dual aug&norm
-
 			# get paired noisy/clean sequences
 			noisy_seq, clean_seq = data
 
 			# normalize + apply SAME augmentation to noisy and clean
 			imgn_train, gt_train = normalize_augment_pair(noisy_seq, clean_seq, ctrl_fr_idx)
 			N, _, H, W = imgn_train.size()
+			#print("DEBUG: imgn_train.shape", getattr(imgn_train, "shape", None))
+			#print("DEBUG: gt_train.shape", getattr(gt_train, "shape", None))
 
 			# move to GPU
 			imgn_train = imgn_train.cuda(non_blocking=True)
@@ -169,10 +121,26 @@ def main(**args):
 			noisy_central = imgn_train[:,3*ctrl_fr_idx:3*ctrl_fr_idx+3,:,:]
 
 			# noise_map = residual
-			noise_map = noisy_central - gt_train
+			start_ch = ctrl_fr_idx * 3
+			noisy_center = imgn_train[:, start_ch:start_ch+3, :, :]   # [B,3,H,W]
+			# If original data was grayscale repeated to 3 channels, extract single channel:
+			noisy_center_single = noisy_center[:, :1, :, :]          # [B,1,H,W]
+			#print("DEBUG: noisy_center.shape", noisy_center.shape, "noisy_center_single.shape", noisy_center_single.shape)
+
+			gt_single = gt_train[:, :1, :, :]
+			#print("DEBUG: gt_single.shape", gt_single.shape)
+
+			residual = noisy_center_single - gt_single
+			noise_map = residual.abs()    # shape [B,1,H,W]
+			# safety: clamp tiny values, match dtype & device
+			noise_map = noise_map.clamp(min=1e-6).to(imgn_train.dtype).to(imgn_train.device)
+			#print("DEBUG: noise_map.shape", noise_map.shape)
+
 
 			# Evaluate model and optimize it
 			out_train = model(imgn_train, noise_map)
+			#print("DEBUG: forward returned out_train.shape", getattr(out_train, "shape", None))
+
 
 			# Compute loss
 			loss = criterion(gt_train, out_train) / (N*2)
@@ -267,11 +235,8 @@ if __name__ == "__main__":
 	parser.add_argument("--val_clean_dir", type=str, default=None, help='path to the directory containing clean validation images')
 	argspar = parser.parse_args()
 
-	# For 8-bit images, normalize noise between [0, 1] 
-	#argspar.val_noiseL /= 255.                     
-	#argspar.noise_ival[0] /= 255.
-	#argspar.noise_ival[1] /= 255.
 
+	#for logging
 	print("\n### Training FastDVDnet denoiser model ###")
 	print("> Parameters:")
 	for p, v in zip(argspar.__dict__.keys(), argspar.__dict__.values()):
