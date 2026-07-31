@@ -16,10 +16,13 @@ from utils_thermal import svd_orthogonalization, close_logger, init_logging, nor
 from train_common_paired_thermal import resume_training, lr_scheduler, log_train_psnr, \
 					validate_and_log, save_model_checkpoint
 
+#logging imports
+import time
+import atexit
+
 
 
 def main(**args):
-
 
 	#Load dataset NOT with dali, but with custom dataset class for paired thermal images
 	r"""Performs the main training loop
@@ -37,8 +40,8 @@ def main(**args):
 		patch_size=args['patch_size'],
 		temp_patch_size=args['temp_patch_size'],
 		epoch_size=args['max_number_patches'],
-		#preload = True,
-		#progress = True
+		preload = True,
+		progress = True
 	)
 
 	loader_train = DataLoader(
@@ -58,13 +61,23 @@ def main(**args):
 	writer, logger = init_logging(args)
 
 	# Define GPU devices #
-	device_ids = [0]
+	device_ids = [0,1,2,3]
 	torch.backends.cudnn.benchmark = True # CUDNN optimization
 
 	# Create model
+	#model = FastDVDnet()
+	#model = nn.DataParallel(model, device_ids=device_ids).cuda() 
+
+	device_ids = list(range(torch.cuda.device_count()))
+	device0 = f'cuda:{device_ids[0]}' if device_ids else 'cuda:0'
+
 	model = FastDVDnet()
-	model = nn.DataParallel(model, device_ids=device_ids).cuda() 
-	#data parallel vs distrubuted (for now do parallel)
+	if len(device_ids) > 1:
+		# wrap first, then move to output device (recommended)
+		model = nn.DataParallel(model, device_ids=device_ids).to(device0)
+	else:
+		model = model.to(device0)
+	
 
 	# Define loss
 	criterion = nn.MSELoss(reduction='sum')
@@ -78,11 +91,11 @@ def main(**args):
 
 	# Training
 	start_time = time.time()
-	#print("DEBUG: torch.cuda.device_count()", torch.cuda.device_count())  
-	#print("DEBUG: device_ids variable:", device_ids) 
-	#print("DEBUG: model.device_ids:", getattr(model, "device_ids", None))
+	print("DEBUG: torch.cuda.device_count()", torch.cuda.device_count())  
+	print("DEBUG: device_ids variable:", device_ids) 
+	print("DEBUG: model.device_ids:", getattr(model, "device_ids", None))
 	for epoch in range(start_epoch, args['epochs']):
-		#print(f"DEBUG: start epoch {epoch}")
+		print(f"DEBUG: start epoch {epoch}")
 		# Set learning rate
 		current_lr, reset_orthog = lr_scheduler(epoch, args)
 		if reset_orthog:
@@ -91,13 +104,12 @@ def main(**args):
 		# set learning rate in optimizer
 		for param_group in optimizer.param_groups:
 			param_group["lr"] = current_lr
-		#print('\nlearning rate %f' % current_lr)
+		print('\nlearning rate %f' % current_lr)
 
 		# train
 
 		for i, data in enumerate(loader_train, 0):
-			#print(f"DEBUG: start batch {i}") 
-
+			print(f"DEBUG: start batch {i}") 
 			# Pre-training step
 			model.train()
 			# When optimizer = optim.Optimizer(net.parameters()) we only zero the optim's grads
@@ -110,8 +122,8 @@ def main(**args):
 			# normalize + apply SAME augmentation to noisy and clean
 			imgn_train, gt_train = normalize_augment_pair(noisy_seq, clean_seq, ctrl_fr_idx)
 			N, _, H, W = imgn_train.size()
-			#print("DEBUG: imgn_train.shape", getattr(imgn_train, "shape", None))
-			#print("DEBUG: gt_train.shape", getattr(gt_train, "shape", None))
+			print("DEBUG: imgn_train.shape", getattr(imgn_train, "shape", None))
+			print("DEBUG: gt_train.shape", getattr(gt_train, "shape", None))
 
 			# move to GPU
 			imgn_train = imgn_train.cuda(non_blocking=True)
@@ -125,21 +137,21 @@ def main(**args):
 			noisy_center = imgn_train[:, start_ch:start_ch+3, :, :]   # [B,3,H,W]
 			# If original data was grayscale repeated to 3 channels, extract single channel:
 			noisy_center_single = noisy_center[:, :1, :, :]          # [B,1,H,W]
-			#print("DEBUG: noisy_center.shape", noisy_center.shape, "noisy_center_single.shape", noisy_center_single.shape)
+			print("DEBUG: noisy_center.shape", noisy_center.shape, "noisy_center_single.shape", noisy_center_single.shape)
 
 			gt_single = gt_train[:, :1, :, :]
-			#print("DEBUG: gt_single.shape", gt_single.shape)
+			print("DEBUG: gt_single.shape", gt_single.shape)
 
 			residual = noisy_center_single - gt_single
 			noise_map = residual.abs()    # shape [B,1,H,W]
 			# safety: clamp tiny values, match dtype & device
 			noise_map = noise_map.clamp(min=1e-6).to(imgn_train.dtype).to(imgn_train.device)
-			#print("DEBUG: noise_map.shape", noise_map.shape)
+			print("DEBUG: noise_map.shape", noise_map.shape)
 
 
 			# Evaluate model and optimize it
 			out_train = model(imgn_train, noise_map)
-			#print("DEBUG: forward returned out_train.shape", getattr(out_train, "shape", None))
+			print("DEBUG: forward returned out_train.shape", getattr(out_train, "shape", None))
 
 
 			# Compute loss
@@ -235,8 +247,65 @@ if __name__ == "__main__":
 	parser.add_argument("--val_clean_dir", type=str, default=None, help='path to the directory containing clean validation images')
 	argspar = parser.parse_args()
 
+	#for log logging
+	log_dir = argspar.log_dir
+	os.makedirs(log_dir, exist_ok=True)
+	logfile = os.path.join(log_dir, f"train_{time.strftime('%Y%m%d-%H%M%S')}.log")
 
-	#for logging
+	# open file line-buffered
+	f = open(logfile, 'a', buffering=1, encoding='utf-8')
+
+	class Tee:
+		def __init__(self, *streams):
+			self.streams = streams
+
+		def write(self, s):
+			for st in self.streams:
+				try:
+					st.write(s)
+				except Exception:
+					pass
+
+		def flush(self):
+			for st in self.streams:
+				try:
+					st.flush()
+				except Exception:
+					pass
+
+		def fileno(self):
+			# Return a fileno from one of the wrapped streams, prefer the file (last stream)
+			for st in reversed(self.streams):
+				if hasattr(st, "fileno"):
+					try:
+						return st.fileno()
+					except Exception:
+						continue
+			# If no underlying stream exposes fileno, raise to match file-like behavior
+			raise OSError("Tee: no fileno available")
+
+	def _close_log():
+		try:
+			f.write(f"\n=== Training log ended: {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+			f.flush()
+		except Exception:
+			pass
+		try:
+			f.close()
+		except Exception:
+			pass
+
+	# replace stdout/stderr with a tee to terminal + file
+	sys.stdout = Tee(sys.__stdout__, f)
+	sys.stderr = sys.stdout
+
+	# write a header and ensure file is closed on exit
+	f.write(f"=== Training log started: {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+	f.flush()
+	#atexit.register(lambda: (f.write(f"\n=== Training log ended: {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n"), f.close()))
+	atexit.register(_close_log)
+
+	#for terminal logging
 	print("\n### Training FastDVDnet denoiser model ###")
 	print("> Parameters:")
 	for p, v in zip(argspar.__dict__.keys(), argspar.__dict__.values()):

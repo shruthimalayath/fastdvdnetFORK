@@ -123,12 +123,15 @@ def validate_and_log(model_temp, dataset_val, temp_psz, writer,
             noisy_central = noisy_val[ctrl_fr_idx]
             clean_central = clean_val[ctrl_fr_idx]
 
-            # Estimate the per-sample noise level from the residual
-            residual = noisy_central - clean_central
-            sigma = residual.view(1, -1).std(dim=1, unbiased=False)
-            sigma = sigma.clamp(min=1e-6).view(1, 1, 1, 1)
-            noise_map = sigma.cuda(non_blocking=True)
+			# Compute per-pixel residual (same as training) and use its absolute value as the noise map.
+            noisy_center_single = noisy_central[:1, :, :]   # (1, H, W)
+            clean_center_single = clean_central[:1, :, :]   # (1, H, W)
+            residual = (noisy_center_single - clean_center_single).abs()  # (1, H, W)
 
+            # make into shape (1, 1, H, W) so denoiser sees batch dim = 1
+            noise_map = residual.unsqueeze(0).clamp(min=1e-6).to(noisy_val.device, dtype=noisy_val.dtype)
+
+			
             # Denoise the full sequence
             out_val = denoise_seq_fastdvdnet(
                 seq=noisy_val,
