@@ -310,15 +310,34 @@ def variable_to_cv2_image(invar, conv_rgb_to_bgr=True, orig_min=None, orig_max=N
             else:
                 res = x[0, :]
             res = (res * 65535.).clip(0, 65535).astype(np.uint16)
+                
         elif nchannels == 3:
             if size4:
-                res = x[0]
+                res_float = x[0]   # shape (C,H,W)
             else:
-                res = x
-            res = res.transpose(1, 2, 0)
-            res = (res * 65535.).clip(0, 65535).astype(np.uint16)
-            if conv_rgb_to_bgr:
-                res = cv2.cvtColor(res, cv2.COLOR_RGB2BGR)
+                res_float = x      # shape (C,H,W)
+
+            # Convert to HWC float for inspection
+            res_float_hwc = res_float.transpose(1, 2, 0)  # (H, W, 3)
+
+            # If all three channels are nearly identical, treat as grayscale and save single channel
+            # Use a tolerance appropriate to your data: use a small tol on normalized floats
+            tol = 1e-6
+            ch0 = res_float_hwc[:, :, 0]
+            ch1 = res_float_hwc[:, :, 1]
+            ch2 = res_float_hwc[:, :, 2]
+            if np.allclose(ch0, ch1, atol=tol) and np.allclose(ch0, ch2, atol=tol):
+                # Single-channel output (take first channel), convert to uint16
+                res = np.clip(ch0, 0, 65535).astype(np.float32)
+                res = np.rint(res).astype(np.uint16)
+                return res
+            else:
+                # Color image: scale/clamp and convert to uint16 then RGB->BGR for cv2
+                res = (res_float_hwc).clip(0, 65535).astype(np.float32)
+                res = np.rint(res).astype(np.uint16)
+                if conv_rgb_to_bgr:
+                    res = cv2.cvtColor(res, cv2.COLOR_RGB2BGR)
+                return res
         else:
             raise Exception('Number of color channels not supported')
         return res
