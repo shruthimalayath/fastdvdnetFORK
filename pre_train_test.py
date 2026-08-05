@@ -13,21 +13,20 @@ import torch
 
 #PairedThermalDataSet test
 dataset = PairedThermalDataset(
-    noisy_root="/mnt/data/users/smalayath/fastdvdnetFORK/DAVIS_clean",
-    clean_root="/mnt/data/users/smalayath/fastdvdnetFORK/DAVIS_clean",
+    noisy_root="/mnt/data/users/smalayath/fastdvdnetFORK/DAVIS_test_root/DAVIS_clean_test",
+    clean_root="/mnt/data/users/smalayath/fastdvdnetFORK/DAVIS_test_root/DAVIS_clean_test",
 )
 
 sample = dataset[0]        
 print(len(sample))
-noisy, clean, sigma = sample
+noisy, clean, sigma, sigma_calc = sample
 print(noisy.shape)
 print(clean.shape)
-print(sigma)
+print("Actual sigma:", sigma)
 print(noisy.dtype)
 print(clean.dtype)
 print(noisy.min(), noisy.max())
 print(clean.min(), clean.max())
-print((noisy-clean).std())
 
 
 #PyTorch DatLoader test
@@ -45,6 +44,8 @@ print(imgn_train.shape)
 print(gt_train.shape)
 print(imgn_train.min())
 print(imgn_train.max())
+
+
 
 
 model = FastDVDnet().cuda()

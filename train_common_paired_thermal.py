@@ -5,7 +5,7 @@ import os
 import time
 import torch
 import torchvision.utils as tutils
-from utils import batch_psnr
+from utils_thermal import batch_psnr, minmax_normalize_pair
 from fastdvdnet import denoise_seq_fastdvdnet
 
 #Changes from original train_common.py to add paired validation (validate_and_log function changed)
@@ -114,22 +114,22 @@ def validate_and_log(model_temp, dataset_val, temp_psz, writer,
             noisy_val = noisy_val.float().cuda(non_blocking=True)
             clean_val = clean_val.float().cuda(non_blocking=True)
 
+			
             # Normalize to [0, 1]
-            noisy_val = noisy_val / 65535.0
-            clean_val = clean_val / 65535.0
+            #noisy_val = noisy_val / 65535.0
+            #clean_val = clean_val / 65535.0
+            noisy_val, clean_val, _, _ = minmax_normalize_pair(noisy_val, clean_val)
 
             # Use the center frame of the validation sequence
             ctrl_fr_idx = noisy_val.size(0) // 2
             noisy_central = noisy_val[ctrl_fr_idx]
             clean_central = clean_val[ctrl_fr_idx]
-
-			# Compute per-pixel residual (same as training) and use its absolute value as the noise map.
-            noisy_center_single = noisy_central[:1, :, :]   # (1, H, W)
-            clean_center_single = clean_central[:1, :, :]   # (1, H, W)
-            residual = (noisy_center_single - clean_center_single).abs()  # (1, H, W)
-
-            # make into shape (1, 1, H, W) so denoiser sees batch dim = 1
-            noise_map = residual.unsqueeze(0).clamp(min=1e-6).to(noisy_val.device, dtype=noisy_val.dtype)
+			#constant noise map
+            CONST_SIGMA = 25.0
+            sigma_norm  = CONST_SIGMA / 65535.0
+            H = noisy_central.size(1)
+            W = noisy_central.size(2)
+            noise_map = noisy_val.new_full((1,1,H, W), float(sigma_norm)).clamp(min = 1e-6)
 
 			
             # Denoise the full sequence

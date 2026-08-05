@@ -48,7 +48,7 @@ def main(**args):
 		dataset_train,
 		batch_size=args['batch_size'],
 		shuffle=True,
-		num_workers=4,
+		num_workers=8,
 		pin_memory=True
 	)
 
@@ -61,7 +61,7 @@ def main(**args):
 	writer, logger = init_logging(args)
 
 	# Define GPU devices #
-	device_ids = [0,1,2,3]
+	device_ids = [1]
 	torch.backends.cudnn.benchmark = True # CUDNN optimization
 
 	# Create model
@@ -91,11 +91,11 @@ def main(**args):
 
 	# Training
 	start_time = time.time()
-	print("DEBUG: torch.cuda.device_count()", torch.cuda.device_count())  
-	print("DEBUG: device_ids variable:", device_ids) 
-	print("DEBUG: model.device_ids:", getattr(model, "device_ids", None))
+	#print("DEBUG: torch.cuda.device_count()", torch.cuda.device_count())  
+	#print("DEBUG: device_ids variable:", device_ids) 
+	#print("DEBUG: model.device_ids:", getattr(model, "device_ids", None))
 	for epoch in range(start_epoch, args['epochs']):
-		print(f"DEBUG: start epoch {epoch}")
+		#print(f"DEBUG: start epoch {epoch}")
 		# Set learning rate
 		current_lr, reset_orthog = lr_scheduler(epoch, args)
 		if reset_orthog:
@@ -104,12 +104,12 @@ def main(**args):
 		# set learning rate in optimizer
 		for param_group in optimizer.param_groups:
 			param_group["lr"] = current_lr
-		print('\nlearning rate %f' % current_lr)
+		#print('\nlearning rate %f' % current_lr)
 
 		# train
 
 		for i, data in enumerate(loader_train, 0):
-			print(f"DEBUG: start batch {i}") 
+			#print(f"DEBUG: start batch {i}") 
 			# Pre-training step
 			model.train()
 			# When optimizer = optim.Optimizer(net.parameters()) we only zero the optim's grads
@@ -122,8 +122,8 @@ def main(**args):
 			# normalize + apply SAME augmentation to noisy and clean
 			imgn_train, gt_train = normalize_augment_pair(noisy_seq, clean_seq, ctrl_fr_idx)
 			N, _, H, W = imgn_train.size()
-			print("DEBUG: imgn_train.shape", getattr(imgn_train, "shape", None))
-			print("DEBUG: gt_train.shape", getattr(gt_train, "shape", None))
+			#print("DEBUG: imgn_train.shape", getattr(imgn_train, "shape", None))
+			#print("DEBUG: gt_train.shape", getattr(gt_train, "shape", None))
 
 			# move to GPU
 			imgn_train = imgn_train.cuda(non_blocking=True)
@@ -133,26 +133,30 @@ def main(**args):
 			noisy_central = imgn_train[:,3*ctrl_fr_idx:3*ctrl_fr_idx+3,:,:]
 
 			# noise_map = residual
-			start_ch = ctrl_fr_idx * 3
-			noisy_center = imgn_train[:, start_ch:start_ch+3, :, :]   # [B,3,H,W]
+			#start_ch = ctrl_fr_idx * 3
+			#noisy_center = imgn_train[:, start_ch:start_ch+3, :, :]   # [B,3,H,W]
 			# If original data was grayscale repeated to 3 channels, extract single channel:
-			noisy_center_single = noisy_center[:, :1, :, :]          # [B,1,H,W]
-			print("DEBUG: noisy_center.shape", noisy_center.shape, "noisy_center_single.shape", noisy_center_single.shape)
+			#noisy_center_single = noisy_center[:, :1, :, :]          # [B,1,H,W]
+			#gt_single = gt_train[:, :1, :, :]
+			#residual = noisy_center_single - gt_single
+			#noise_map = residual.abs()    # shape [B,1,H,W]
+			#noise_map = noise_map.clamp(min=1e-6).to(imgn_train.dtype).to(imgn_train.device)
 
-			gt_single = gt_train[:, :1, :, :]
-			print("DEBUG: gt_single.shape", gt_single.shape)
 
-			residual = noisy_center_single - gt_single
-			noise_map = residual.abs()    # shape [B,1,H,W]
-			# safety: clamp tiny values, match dtype & device
-			noise_map = noise_map.clamp(min=1e-6).to(imgn_train.dtype).to(imgn_train.device)
-			print("DEBUG: noise_map.shape", noise_map.shape)
-
+			#hard coded noise map
+			CONST_SIGMA = 25.0
+			# normalize to [0,1] (training data is normalized to [0,1])
+			sigma_norm = CONST_SIGMA / 255.0
+			# N, _, H, W are already available above
+			# create per-sample, per-pixel constant noise map: shape [B,1,H,W]
+			noise_map = torch.full((N, 1, H, W), float(sigma_norm),
+								   dtype=imgn_train.dtype, device=imgn_train.device)
+			# clamp tiny values for safety
+			noise_map = noise_map.clamp(min=1e-6)
+			# --- end hard-coded block ---
 
 			# Evaluate model and optimize it
 			out_train = model(imgn_train, noise_map)
-			print("DEBUG: forward returned out_train.shape", getattr(out_train, "shape", None))
-
 
 			# Compute loss
 			loss = criterion(gt_train, out_train) / (N*2)

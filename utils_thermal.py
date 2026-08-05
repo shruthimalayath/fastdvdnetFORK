@@ -43,11 +43,8 @@ def normalize_augment_pair(noisy_seq, clean_seq, ctrl_fr_idx):
         w_aug = [32, 12, 12, 12, 12, 12, 12, 12]
         return choices(aug_list, w_aug)[0]
 
-    # normalize
-    noisy_seq = noisy_seq.float() / 65535.
-    clean_seq = clean_seq.float() / 65535.
-
-	# normalize
+    # normalize both noisy and clean using the same min/max values per sample
+    noisy_seq, clean_seq, minv, maxv = minmax_normalize_pair(noisy_seq, clean_seq)
 
     noisy_seq = noisy_seq.reshape(noisy_seq.size(0), -1, noisy_seq.size(-2), noisy_seq.size(-1))
     clean_seq = clean_seq.reshape(clean_seq.size(0), -1, clean_seq.size(-2), clean_seq.size(-1))
@@ -253,43 +250,78 @@ def batch_psnr(img, imclean, data_range):
 					   data_range=data_range)
 	return psnr/img_cpu.shape[0]
 
-def variable_to_cv2_image(invar, conv_rgb_to_bgr=True):
-	r"""Converts a torch.autograd.Variable to an OpenCV image
+def variable_to_cv2_image(invar, conv_rgb_to_bgr=True, orig_min=None, orig_max=None, eps=1e-6):
+    """Converts a torch tensor to an OpenCV image.
 
-	Args:
-		invar: a torch.autograd.Variable
-		conv_rgb_to_bgr: boolean. If True, convert output image from RGB to BGR color space
-	Returns:
-		a HxWxC uint8 image
-	"""
-	assert torch.max(invar) <= 1.0
+    Args:
+        invar: a torch.Tensor with values in [0, 1] (unless orig_min/orig_max are provided)
+        conv_rgb_to_bgr: boolean. If True, convert output image from RGB to BGR color space
+        orig_min: optional scalar or tensor with the original minimum value used for min-max normalization
+        orig_max: optional scalar or tensor with the original maximum value used for min-max normalization
+        eps: not used for denormalize here; kept for compatibility
+    Returns:
+        a HxWxC uint16 image
+    """
+    x = invar.data.cpu()
+    # If orig_min/orig_max are provided, denormalize first. We expect orig_min/orig_max
+    # to be in the same units as the original raw values (e.g., uint16 sensor units).
+    if orig_min is not None and orig_max is not None:
+        x = minmax_denormalize(x, orig_min, orig_max, eps=eps)
+        # At this point x should already be in raw units (e.g. ~0..65535). Do NOT multiply further.
+        x = x.numpy().astype(np.float32)
+        size4 = x.ndim == 4
+        if size4:
+            nchannels = x.shape[1]
+        else:
+            nchannels = x.shape[0]
 
-	size4 = len(invar.size()) == 4
-	if size4:
-		nchannels = invar.size()[1]
-	else:
-		nchannels = invar.size()[0]
+        if nchannels == 1:
+            if size4:
+                res = x[0, 0, :]
+            else:
+                res = x[0, :]
+            res = np.clip(res, 0, 65535).astype(np.uint16)
+        elif nchannels == 3:
+            if size4:
+                res = x[0]
+            else:
+                res = x
+            res = res.transpose(1, 2, 0)
+            res = np.clip(res, 0, 65535).astype(np.uint16)
+            if conv_rgb_to_bgr:
+                res = cv2.cvtColor(res, cv2.COLOR_RGB2BGR)
+        else:
+            raise Exception('Number of color channels not supported')
+        return res
+    else:
+        # Expect input is normalized [0,1]: multiply to uint16 range
+        # only assert in that case
+        assert torch.max(invar) <= 1.0 + 1e-6
+        x = invar.data.cpu().float().numpy().astype(np.float32)
+        size4 = x.ndim == 4
+        if size4:
+            nchannels = x.shape[1]
+        else:
+            nchannels = x.shape[0]
 
-	if nchannels == 1:
-		if size4:
-			res = invar.data.cpu().numpy()[0, 0, :]
-		else:
-			res = invar.data.cpu().numpy()[0, :]
-		res = (res*65535.).clip(0, 65535).astype(np.uint16)
-		#res = (res*16383.).clip(0, 16383).astype(np.uint16)
-	elif nchannels == 3:
-		if size4:
-			res = invar.data.cpu().numpy()[0]
-		else:
-			res = invar.data.cpu().numpy()
-		res = res.transpose(1, 2, 0)
-		res = (res*65535.).clip(0, 65535).astype(np.uint16)
-		#res = (res*16383.).clip(0, 16383).astype(np.uint16)
-		if conv_rgb_to_bgr:
-			res = cv2.cvtColor(res, cv2.COLOR_RGB2BGR)
-	else:
-		raise Exception('Number of color channels not supported')
-	return res
+        if nchannels == 1:
+            if size4:
+                res = x[0, 0, :]
+            else:
+                res = x[0, :]
+            res = (res * 65535.).clip(0, 65535).astype(np.uint16)
+        elif nchannels == 3:
+            if size4:
+                res = x[0]
+            else:
+                res = x
+            res = res.transpose(1, 2, 0)
+            res = (res * 65535.).clip(0, 65535).astype(np.uint16)
+            if conv_rgb_to_bgr:
+                res = cv2.cvtColor(res, cv2.COLOR_RGB2BGR)
+        else:
+            raise Exception('Number of color channels not supported')
+        return res
 
 def get_git_revision_short_hash():
 	r"""Returns the current Git commit.
@@ -349,14 +381,81 @@ def close_logger(logger):
 		i.flush()
 		i.close()
 
-def normalize(data):
-	r"""Normalizes a unit8 image to a float32 image in the range [0, 1]
+def normalize(data, eps=1e-6):
+	r"""Normalizes an image to the range [0, 1] using min-max scaling.
 
 	Args:
-		data: a unint8 numpy array to normalize from [0, 255] to [0, 1]
+		data: a numpy array or torch tensor
+		eps: small epsilon to avoid division by zero
+	Returns:
+		float32 tensor or numpy array in [0, 1]
 	"""
-	return np.float32(data/65535.)
-	#return np.float32(data/16383.)
+	return np.float32(minmax_normalize(data, eps=eps))
+
+
+def minmax_normalize_pair(noisy_seq, clean_seq, eps=1e-6, dims=None):
+	"""Normalize a noisy/clean pair using the same per-sample min/max range."""
+	if torch.is_tensor(noisy_seq) and torch.is_tensor(clean_seq):
+		if dims is None:
+			if noisy_seq.ndim == 5:
+				dims = (1, 2, 3, 4)
+			elif noisy_seq.ndim == 4:
+				dims = (1, 2, 3)
+			elif noisy_seq.ndim == 3:
+				dims = (1, 2)
+			else:
+				dims = tuple(range(1, noisy_seq.ndim))
+		combined = torch.cat((noisy_seq, clean_seq), dim=1)
+		minv = combined.amin(dim=dims, keepdim=True)
+		maxv = combined.amax(dim=dims, keepdim=True)
+		noisy_norm = (noisy_seq.float() - minv) / (maxv - minv + eps)
+		clean_norm = (clean_seq.float() - minv) / (maxv - minv + eps)
+		return noisy_norm, clean_norm, minv, maxv
+	else:
+		noisy_seq = np.array(noisy_seq, dtype=np.float32)
+		clean_seq = np.array(clean_seq, dtype=np.float32)
+		if dims is None:
+			if noisy_seq.ndim == 5:
+				dims = (1, 2, 3, 4)
+			elif noisy_seq.ndim == 4:
+				dims = (1, 2, 3)
+			elif noisy_seq.ndim == 3:
+				dims = (1, 2)
+			else:
+				dims = tuple(range(1, noisy_seq.ndim))
+		combined = np.concatenate((noisy_seq, clean_seq), axis=1)
+		minv = combined.min(axis=dims, keepdims=True)
+		maxv = combined.max(axis=dims, keepdims=True)
+		noisy_norm = (noisy_seq - minv) / (maxv - minv + eps)
+		clean_norm = (clean_seq - minv) / (maxv - minv + eps)
+		return noisy_norm, clean_norm, minv, maxv
+
+
+def minmax_denormalize(x, orig_min, orig_max, eps=1e-6):
+    """Undo min-max normalization using stored min/max values."""
+    if torch.is_tensor(x):
+        x = x.float()
+        if not torch.is_tensor(orig_min):
+            orig_min = torch.tensor(orig_min, dtype=x.dtype, device=x.device)
+        else:
+            orig_min = orig_min.to(x.device)
+        if not torch.is_tensor(orig_max):
+            orig_max = torch.tensor(orig_max, dtype=x.dtype, device=x.device)
+        else:
+            orig_max = orig_max.to(x.device)
+
+        scale = orig_max - orig_min
+        # avoid division-by-zero / zero-scale by setting zero scales to 1.0
+        scale = torch.where(scale == 0, torch.ones_like(scale), scale)
+        return x * scale + orig_min
+    else:
+        x = np.array(x, dtype=np.float32)
+        orig_min = np.array(orig_min, dtype=np.float32)
+        orig_max = np.array(orig_max, dtype=np.float32)
+        scale = orig_max - orig_min
+        scale = np.where(scale == 0, 1.0, scale)
+        return x * scale + orig_min
+
 
 def svd_orthogonalization(lyr):
 	r"""Applies regularization to the training by performing the
@@ -406,3 +505,37 @@ def remove_dataparallel_wrapper(state_dict):
 		new_state_dict[name] = v
 
 	return new_state_dict
+
+
+def minmax_normalize(x, eps=1e-6, dims=None, return_stats=False):
+    """Apply min-max normalization across the spatial/channel dimensions."""
+    if torch.is_tensor(x):
+        x = x.float()
+        if dims is None:
+            if x.ndim == 5:
+                dims = (1, 2, 3, 4)
+            elif x.ndim == 4:
+                dims = (1, 2, 3)
+            elif x.ndim == 3:
+                dims = (1, 2)
+            else:
+                dims = tuple(range(1, x.ndim))
+        minv = x.amin(dim=dims, keepdim=True)
+        maxv = x.amax(dim=dims, keepdim=True)
+        normalized = (x - minv) / (maxv - minv + eps)
+        return (normalized, minv, maxv) if return_stats else normalized
+    else:
+        x = np.array(x, dtype=np.float32)
+        if dims is None:
+            if x.ndim == 5:
+                dims = (1, 2, 3, 4)
+            elif x.ndim == 4:
+                dims = (1, 2, 3)
+            elif x.ndim == 3:
+                dims = (1, 2)
+            else:
+                dims = tuple(range(1, x.ndim))
+        minv = x.min(axis=dims, keepdims=True)
+        maxv = x.max(axis=dims, keepdims=True)
+        normalized = (x - minv) / (maxv - minv + eps)
+        return (normalized, minv, maxv) if return_stats else normalized

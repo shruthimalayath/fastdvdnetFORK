@@ -29,10 +29,8 @@ class PairedValDataset(Dataset):
         seq_name = self.sequences[idx]
         noisy_dir = os.path.join(self.noisy_root, seq_name)
         clean_dir = os.path.join(self.clean_root, seq_name)
-        #noisy_files = sorted(glob.glob(os.path.join(noisy_dir, "*.tif")))[:self.max_num_fr]
-        #clean_files = sorted(glob.glob(os.path.join(clean_dir, "*.tif")))[:self.max_num_fr]
-        noisy_files = sorted(glob.glob(os.path.join(noisy_dir, "*.jpg")))[:self.max_num_fr]
-        clean_files = sorted(glob.glob(os.path.join(clean_dir, "*.jpg")))[:self.max_num_fr]
+        noisy_files = sorted(glob.glob(os.path.join(noisy_dir, "*.tif")))[:self.max_num_fr]
+        clean_files = sorted(glob.glob(os.path.join(clean_dir, "*.tif")))[:self.max_num_fr]
 
         if len(noisy_files) != len(clean_files):
             raise ValueError(
@@ -46,15 +44,9 @@ class PairedValDataset(Dataset):
 
         for nf, cf in zip(noisy_files, clean_files):
 
-            #noisy = cv2.imread(nf, cv2.IMREAD_UNCHANGED)
-            #clean = cv2.imread(cf, cv2.IMREAD_UNCHANGED)
+            noisy = cv2.imread(nf, cv2.IMREAD_UNCHANGED)
+            clean = cv2.imread(cf, cv2.IMREAD_UNCHANGED)
             
-            noisy = cv2.imread(nf, cv2.IMREAD_COLOR)
-            clean = cv2.imread(cf, cv2.IMREAD_COLOR)
-
-            noisy = cv2.cvtColor(noisy, cv2.COLOR_BGR2RGB)
-            clean = cv2.cvtColor(clean, cv2.COLOR_BGR2RGB)
-
             if noisy is None:
                 raise ValueError(f"Could not read {nf}")
             if clean is None:
@@ -67,23 +59,8 @@ class PairedValDataset(Dataset):
         clean_seq = np.stack(clean_frames, axis=0)
 
         # convert: [F,H,W] -> [F,3,H,W] for thermal
-        #noisy_seq = np.repeat( noisy_seq[:, None, :, :], 3, axis=1)
-        #clean_seq = np.repeat( clean_seq[:, None, :, :], 3, axis=1)
+        noisy_seq = np.repeat( noisy_seq[:, None, :, :], 3, axis=1)
+        clean_seq = np.repeat( clean_seq[:, None, :, :], 3, axis=1)
 
-        #for RGB training #1 -----------------------------------------------
-        #during training clean & noise sequences both point to the same clean directory
-        #noise is added here; each temporal window of 5 gets a random Gaussian noise value
-
-        noisy_seq = noisy_seq.transpose(0, 3, 1, 2)
-        clean_seq = clean_seq.transpose(0, 3, 1, 2)
-
-
-        #sigma = random.uniform(5, 55)
-        sigma = 25.0
-        clean_seq = clean_seq.astype(np.float32)
-        noise = np.random.randn(*clean_seq.shape) * sigma
-        noisy_seq = clean_seq.astype(np.float32) + noise
-        noisy_seq = np.clip(noisy_seq, 0, 255)
-        #------------------------------------------------------------------
 
         return (torch.from_numpy(noisy_seq), torch.from_numpy(clean_seq))
