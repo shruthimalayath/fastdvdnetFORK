@@ -12,6 +12,7 @@ import cv2
 import torch
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from tensorboardX import SummaryWriter
+import tifffile
 
 IMAGETYPES = ('*.bmp', '*.png', '*.jpg', '*.jpeg', '*.tif') # Supported image types
 
@@ -49,10 +50,6 @@ def normalize_augment_pair(noisy_seq, clean_seq, ctrl_fr_idx):
     noisy_seq = noisy_seq.reshape(noisy_seq.size(0), -1, noisy_seq.size(-2), noisy_seq.size(-1))
     clean_seq = clean_seq.reshape(clean_seq.size(0), -1, clean_seq.size(-2), clean_seq.size(-1))
 
-    # flatten temporal dimension: issue continguous vs non contiguous tensor
-    #noisy_seq = noisy_seq.view(noisy_seq.size(0),-1,noisy_seq.size(-2),noisy_seq.size(-1))
-    #clean_seq = clean_seq.view(clean_seq.size(0),-1,clean_seq.size(-2),clean_seq.size(-1))
-
     # choose one augmentation
     transf = get_transform()
 
@@ -64,55 +61,6 @@ def normalize_augment_pair(noisy_seq, clean_seq, ctrl_fr_idx):
     gt_train = clean_seq[ :,3*ctrl_fr_idx:3*ctrl_fr_idx+3,:,:]
 
     return noisy_seq, gt_train
-
-def normalize_augment(datain, ctrl_fr_idx):
-	'''Normalizes and augments an input patch of dim [N, num_frames, C. H, W] in [0., 255.] to \
-		[N, num_frames*C. H, W] in  [0., 1.]. It also returns the central frame of the temporal \
-		patch as a ground truth.
-	'''
-	def transform(sample):
-		# define transformations
-		do_nothing = lambda x: x
-		do_nothing.__name__ = 'do_nothing'
-		flipud = lambda x: torch.flip(x, dims=[2])
-		flipud.__name__ = 'flipup'
-		rot90 = lambda x: torch.rot90(x, k=1, dims=[2, 3])
-		rot90.__name__ = 'rot90'
-		rot90_flipud = lambda x: torch.flip(torch.rot90(x, k=1, dims=[2, 3]), dims=[2])
-		rot90_flipud.__name__ = 'rot90_flipud'
-		rot180 = lambda x: torch.rot90(x, k=2, dims=[2, 3])
-		rot180.__name__ = 'rot180'
-		rot180_flipud = lambda x: torch.flip(torch.rot90(x, k=2, dims=[2, 3]), dims=[2])
-		rot180_flipud.__name__ = 'rot180_flipud'
-		rot270 = lambda x: torch.rot90(x, k=3, dims=[2, 3])
-		rot270.__name__ = 'rot270'
-		rot270_flipud = lambda x: torch.flip(torch.rot90(x, k=3, dims=[2, 3]), dims=[2])
-		rot270_flipud.__name__ = 'rot270_flipud'
-		add_csnt = lambda x: x + torch.normal(mean=torch.zeros(x.size()[0], 1, 1, 1), \
-								 std=(5/65535.)).expand_as(x).to(x.device)
-		add_csnt.__name__ = 'add_csnt'
-
-		# define transformations and their frequency, then pick one.
-		aug_list = [do_nothing, flipud, rot90, rot90_flipud, \
-					rot180, rot180_flipud, rot270, rot270_flipud, add_csnt]
-		w_aug = [32, 12, 12, 12, 12, 12, 12, 12, 12] # one fourth chances to do_nothing
-		transf = choices(aug_list, w_aug)
-
-		# transform all images in array
-		return transf[0](sample)
-
-	img_train = datain
-
-	# convert to [N, num_frames*C. H, W] in  [0., 1.] from [N, num_frames, C. H, W] in [0., 65535.]
-	img_train = img_train.view(img_train.size()[0], -1, \
-							   img_train.size()[-2], img_train.size()[-1]) / 65535.
-	
-	#augment
-	img_train = transform(img_train)
-
-	# extract ground truth (central frame)
-	gt_train = img_train[:, 3*ctrl_fr_idx:3*ctrl_fr_idx+3, :, :]
-	return img_train, gt_train
 
 def init_logging(argdict):
 	"""Initilizes the logging and the SummaryWriter modules
@@ -558,3 +506,171 @@ def minmax_normalize(x, eps=1e-6, dims=None, return_stats=False):
         maxv = x.max(axis=dims, keepdims=True)
         normalized = (x - minv) / (maxv - minv + eps)
         return (normalized, minv, maxv) if return_stats else normalized
+
+
+
+def normalize_augment_pair_fixed(noisy_seq, clean_seq, ctrl_fr_idx, max_val=65535.0):
+    """
+    Same as normalize_augment_pair, but divides by a fixed constant instead of
+    per-sample min-max normalization.
+    """
+    def get_transform():
+        aug_list = [
+            lambda x: x,
+            lambda x: torch.flip(x, dims=[2]),
+            lambda x: torch.rot90(x, k=1, dims=[2, 3]),
+            lambda x: torch.flip(torch.rot90(x, k=1, dims=[2, 3]), dims=[2]),
+            lambda x: torch.rot90(x, k=2, dims=[2, 3]),
+            lambda x: torch.flip(torch.rot90(x, k=2, dims=[2, 3]), dims=[2]),
+            lambda x: torch.rot90(x, k=3, dims=[2, 3]),
+            lambda x: torch.flip(torch.rot90(x, k=3, dims=[2, 3]), dims=[2]),
+        ]
+        w_aug = [32, 12, 12, 12, 12, 12, 12, 12]
+        return choices(aug_list, w_aug)[0]
+
+    noisy_seq = noisy_seq.float() / max_val
+    clean_seq = clean_seq.float() / max_val
+
+    noisy_seq = noisy_seq.reshape(noisy_seq.size(0), -1, noisy_seq.size(-2), noisy_seq.size(-1))
+    clean_seq = clean_seq.reshape(clean_seq.size(0), -1, clean_seq.size(-2), clean_seq.size(-1))
+
+    transf = get_transform()
+    noisy_seq = transf(noisy_seq)
+    clean_seq = transf(clean_seq)
+
+    gt_train = clean_seq[:, 3*ctrl_fr_idx:3*ctrl_fr_idx+3, :, :]
+    return noisy_seq, gt_train
+
+
+def get_const_noise_sigma_norm(norm_mode, const_sigma=25.0, max_val=65535.0):
+    """
+    Single source of truth for the constant noise-map scale, so train and
+    validation can never diverge on this again.
+    - norm_mode='fixed'  -> data is in [0,1] via /max_val, so scale sigma the same way
+    - norm_mode='minmax' -> matches the scale used in your successful constant+minmax run
+    """
+    if norm_mode == 'fixed':
+        return const_sigma / max_val
+    elif norm_mode == 'minmax':
+        return const_sigma / 65535.0
+    else:
+        raise ValueError(f"Unknown norm_mode: {norm_mode}")
+
+
+def load_raw_sequence(seq_dir, max_num_fr=100):
+    files = sorted(glob.glob(os.path.join(seq_dir, '*.tif')))
+    if len(files) == 0:
+        return None
+    frames = [tifffile.imread(p).astype(np.float32) for p in files[:max_num_fr]]
+    seq = np.stack(frames, axis=0)               # [F, H, W]
+    seq = np.repeat(seq[:, None, :, :], 3, axis=1)  # [F, 3, H, W]
+    return seq
+
+
+def compute_blackbody_noise_map(blackbody_dir, max_num_fr=800, use_abs=True,
+                                 normalize=True, save_path=None):
+    """
+    Estimate a per-pixel spatial noise pattern from a long static blackbody
+    sequence (flat-field / fixed-pattern-noise style calibration).
+
+    For each frame: subtract that frame's own spatial mean (zero-mean it),
+    then average the zero-meaned frames across the whole sequence. Random
+    per-pixel temporal noise averages toward 0 over many frames, so what
+    survives is the SYSTEMATIC per-pixel deviation -- fixed-pattern noise.
+
+    Args:
+        blackbody_dir: directory of raw .tif frames of a static blackbody
+        max_num_fr: number of frames to use (default 800)
+        use_abs: if True, take abs() so it's non-negative (sigma-like)
+        normalize: if True, min-max normalize the result to [0,1] using the
+            map's OWN global min/max (computed once, over the whole map --
+            NOT per-patch). This is what makes the saved map directly usable
+            as a conditioning-channel input with no further runtime scaling.
+        save_path: optional path to cache the result as .npy
+
+    Returns:
+        noise_map: numpy [H, W] float32. In [0,1] raw-magnitude-normalized
+            units if normalize=True, else raw units.
+    """
+    files = sorted(glob.glob(os.path.join(blackbody_dir, '*.tif')))[:max_num_fr]
+    if len(files) == 0:
+        raise RuntimeError(f"No .tif frames found in {blackbody_dir}")
+
+    accum = None
+    for fpath in files:
+        frame = tifffile.imread(fpath).astype(np.float32)
+        zero_mean = frame - frame.mean()
+        if accum is None:
+            accum = np.zeros_like(zero_mean)
+        accum += zero_mean
+
+    noise_map = accum / len(files)
+    if use_abs:
+        noise_map = np.abs(noise_map)
+
+    print(f"Computed blackbody noise map from {len(files)} frames: "
+          f"shape={noise_map.shape}, min={noise_map.min():.4f}, "
+          f"max={noise_map.max():.4f}, mean={noise_map.mean():.4f}")
+
+    if normalize:
+        mn, mx = noise_map.min(), noise_map.max()
+        noise_map = (noise_map - mn) / (mx - mn + 1e-6)
+        print(f"Min-max normalized (global) to [0,1]: "
+              f"raw range was [{mn:.4f}, {mx:.4f}]")
+
+    if save_path is not None:
+        np.save(save_path, noise_map)
+        print(f"Saved to {save_path}")
+
+    return noise_map
+
+
+def sample_augmentation_transform():
+    """Return one randomly chosen spatial transform, same weighting as
+    normalize_augment_pair's internal choice. Exposed here so the SAME
+    sampled transform can be applied to a noise-map patch alongside the
+    noisy/clean patch, keeping them spatially aligned through augmentation.
+    """
+    aug_list = [
+        lambda x: x,
+        lambda x: torch.flip(x, dims=[2]),
+        lambda x: torch.rot90(x, k=1, dims=[2, 3]),
+        lambda x: torch.flip(torch.rot90(x, k=1, dims=[2, 3]), dims=[2]),
+        lambda x: torch.rot90(x, k=2, dims=[2, 3]),
+        lambda x: torch.flip(torch.rot90(x, k=2, dims=[2, 3]), dims=[2]),
+        lambda x: torch.rot90(x, k=3, dims=[2, 3]),
+        lambda x: torch.flip(torch.rot90(x, k=3, dims=[2, 3]), dims=[2]),
+    ]
+    w_aug = [32, 12, 12, 12, 12, 12, 12, 12]
+    return choices(aug_list, w_aug)[0]
+
+
+def normalize_augment_triplet(noisy_seq, clean_seq, noise_map_patch, ctrl_fr_idx,
+                               norm_mode='minmax', max_val=65535.0, eps=1e-6):
+    """
+    Like normalize_augment_pair / normalize_augment_pair_fixed, but also
+    carries a spatially-aligned noise_map_patch (already pre-normalized to
+    [0,1] at calibration time -- see compute_blackbody_noise_map) through
+    the SAME sampled augmentation, so it stays aligned with the actual
+    patch after flips/rotations too. No runtime rescaling of the noise map
+    is needed here since it's already in its final [0,1] range.
+    """
+    if norm_mode == 'minmax':
+        noisy_seq, clean_seq, minv, maxv = minmax_normalize_pair(noisy_seq, clean_seq)
+    elif norm_mode == 'fixed':
+        noisy_seq = noisy_seq.float() / max_val
+        clean_seq = clean_seq.float() / max_val
+    else:
+        raise ValueError(f"Unknown norm_mode: {norm_mode}")
+
+    noisy_seq = noisy_seq.reshape(noisy_seq.size(0), -1, noisy_seq.size(-2), noisy_seq.size(-1))
+    clean_seq = clean_seq.reshape(clean_seq.size(0), -1, clean_seq.size(-2), clean_seq.size(-1))
+
+    transf = sample_augmentation_transform()
+    noisy_seq = transf(noisy_seq)
+    clean_seq = transf(clean_seq)
+    noise_map = transf(noise_map_patch.float()).clamp(min=eps)  # SAME transform -> stays aligned
+
+    gt_train = clean_seq[:, 3 * ctrl_fr_idx:3 * ctrl_fr_idx + 3, :, :]
+
+    return noisy_seq, gt_train, noise_map

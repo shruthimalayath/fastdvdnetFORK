@@ -61,7 +61,7 @@ def main(**args):
 	writer, logger = init_logging(args)
 
 	# Define GPU devices #
-	device_ids = [1]
+	device_ids = [2]
 	torch.backends.cudnn.benchmark = True # CUDNN optimization
 
 	# Create model
@@ -108,6 +108,8 @@ def main(**args):
 
 		# train
 
+		epoch_loss = 0.0
+		epoch_batches = 0
 		for i, data in enumerate(loader_train, 0):
 			#print(f"DEBUG: start batch {i}") 
 			# Pre-training step
@@ -146,7 +148,7 @@ def main(**args):
 			#hard coded noise map
 			CONST_SIGMA = 25.0
 			# normalize to [0,1] (training data is normalized to [0,1])
-			sigma_norm = CONST_SIGMA / 255.0
+			sigma_norm = CONST_SIGMA / 65535.0
 			# N, _, H, W are already available above
 			# create per-sample, per-pixel constant noise map: shape [B,1,H,W]
 			noise_map = torch.full((N, 1, H, W), float(sigma_norm),
@@ -162,6 +164,8 @@ def main(**args):
 			loss = criterion(gt_train, out_train) / (N*2)
 			loss.backward()
 			optimizer.step()
+			epoch_loss += loss.item()
+			epoch_batches += 1
 
 			# Results
 			if training_params['step'] % args['save_every'] == 0:
@@ -182,6 +186,13 @@ def main(**args):
 			training_params['step'] += 1
 
 		# Call to model.eval() to correctly set the BN layers before inference
+
+		if epoch_batches > 0:
+			avg_loss = epoch_loss / epoch_batches
+			writer.add_scalar('Loss/train', avg_loss, epoch)   # per-epoch
+			writer.flush()
+			print(f"[epoch {epoch+1}] avg train loss: {avg_loss:.6f}")
+		
 		model.eval()
 
 		# Validation and log images

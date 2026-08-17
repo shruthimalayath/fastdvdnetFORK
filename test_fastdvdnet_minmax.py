@@ -11,9 +11,11 @@ import numpy as np
 import cv2
 import torch
 import torch.nn as nn
+import glob
+import tifffile
 
 from models import FastDVDnet
-from utils_thermal import variable_to_cv2_image, init_logger_test, open_sequence, close_logger
+from utils_thermal import variable_to_cv2_image, init_logger_test, open_sequence, close_logger, load_raw_sequence, minmax_normalize_pair
 
 NUM_IN_FR_EXT = 5
 OUTIMGEXT = '.tif'
@@ -106,10 +108,22 @@ def main(**args):
     model.eval()
 
     # open_sequence/open_image normalize by dividing by 65535.
-    seqn_np, _, _ = open_sequence(args['test_noisy_path'], args['gray'], expand_if_needed=False,
-                                  max_num_fr=args['max_num_fr_per_seq'])
-    seqc_np, _, _ = open_sequence(args['test_clean_path'], args['gray'], expand_if_needed=False,
-                                  max_num_fr=args['max_num_fr_per_seq'])
+    #seqn_np, _, _ = open_sequence(args['test_noisy_path'], args['gray'], expand_if_needed=False,
+                                  #max_num_fr=args['max_num_fr_per_seq'])
+    #seqc_np, _, _ = open_sequence(args['test_clean_path'], args['gray'], expand_if_needed=False,
+                                  #max_num_fr=args['max_num_fr_per_seq'])
+    #if seqn_np is None or seqc_np is None:
+        #raise RuntimeError("Could not open noisy or clean sequence paths")
+    #if seqn_np.shape != seqc_np.shape:
+        #raise RuntimeError(f"Noisy and clean sequences must have same shape. noisy:{seqn_np.shape} clean:{seqc_np.shape}")
+
+    #F, C, H, W = seqn_np.shape
+    #print(f"Loaded sequences: frames={F}, channels={C}, H={H}, W={W}")
+
+
+    seqn_np = load_raw_sequence(args['test_noisy_path'], args['max_num_fr_per_seq'])
+    seqc_np = load_raw_sequence(args['test_clean_path'], args['max_num_fr_per_seq'])
+
     if seqn_np is None or seqc_np is None:
         raise RuntimeError("Could not open noisy or clean sequence paths")
     if seqn_np.shape != seqc_np.shape:
@@ -118,48 +132,57 @@ def main(**args):
     F, C, H, W = seqn_np.shape
     print(f"Loaded sequences: frames={F}, channels={C}, H={H}, W={W}")
 
-    use_minmax = args['minmax']
-    max_val = float(args['max_val'])
+    seqn = torch.from_numpy(seqn_np).float()
+    seqc = torch.from_numpy(seqc_np).float()
+
+    # Use the same shared per-sample normalization as validation/training
+    seqn, seqc, _, _ = minmax_normalize_pair(seqn, seqc)
+
+    seqn = seqn.to(device)
+    seqc = seqc.to(device)
+
+    #use_minmax = args['minmax']
+    #max_val = float(args['max_val'])
 
     # convert to float arrays (open_sequence returned normalized floats in [0,1])
-    seqn_np = seqn_np.astype(np.float32)
-    seqc_np = seqc_np.astype(np.float32)
+    #seqn_np = seqn_np.astype(np.float32)
+    #seqc_np = seqc_np.astype(np.float32)
 
-    print(f"DEBUG before scaling: noisy min={float(seqn_np.min()):.6e} max={float(seqn_np.max()):.6e}, "
-          f"clean min={float(seqc_np.min()):.6e} max={float(seqc_np.max()):.6e}")
+    #print(f"DEBUG before scaling: noisy min={float(seqn_np.min()):.6e} max={float(seqn_np.max()):.6e}, "
+          #f"clean min={float(seqc_np.min()):.6e} max={float(seqc_np.max()):.6e}")
 
-    if use_minmax:
+    #if use_minmax:
         # Undo open_sequence normalization to recover approx raw 16-bit scale
-        seqn_raw = seqn_np * max_val
-        seqc_raw = seqc_np * max_val
+        #seqn_raw = seqn_np * max_val
+        #seqc_raw = seqc_np * max_val
 
-        print("Using PER-FRAME min-max normalization on RAW scale (undoing /65535 first).")
-        for i in range(F):
-            mn = float(seqn_raw[i].min())
-            mx = float(seqn_raw[i].max())
-            if mx - mn < 1e-12:
-                seqn_np[i] = np.clip(seqn_raw[i] - mn, 0.0, None)
-                seqc_np[i] = np.clip(seqc_raw[i] - mn, 0.0, None)
-            else:
-                seqn_np[i] = (seqn_raw[i] - mn) / (mx - mn)
-                seqc_np[i] = (seqc_raw[i] - mn) / (mx - mn)
+        #print("Using PER-FRAME min-max normalization on RAW scale (undoing /65535 first).")
+        #for i in range(F):
+            #mn = float(seqn_raw[i].min())
+            #mx = float(seqn_raw[i].max())
+            #if mx - mn < 1e-12:
+                #seqn_np[i] = np.clip(seqn_raw[i] - mn, 0.0, None)
+                #seqc_np[i] = np.clip(seqc_raw[i] - mn, 0.0, None)
+            #else:
+                #seqn_np[i] = (seqn_raw[i] - mn) / (mx - mn)
+                #seqc_np[i] = (seqc_raw[i] - mn) / (mx - mn)
 
             # Print raw min/max and normalized min/max for this frame
-            print(f"Frame {i:04d}: raw_min={mn:.6f}, raw_max={mx:.6f} -> norm_min={float(seqn_np[i].min()):.6e}, norm_max={float(seqn_np[i].max()):.6e}")
+            #print(f"Frame {i:04d}: raw_min={mn:.6f}, raw_max={mx:.6f} -> norm_min={float(seqn_np[i].min()):.6e}, norm_max={float(seqn_np[i].max()):.6e}")
 
-        seqn_np = np.clip(seqn_np, 0.0, 1.0)
-        seqc_np = np.clip(seqc_np, 0.0, 1.0)
-    else:
+        #seqn_np = np.clip(seqn_np, 0.0, 1.0)
+        #seqc_np = np.clip(seqc_np, 0.0, 1.0)
+    #else:
         # keep open_sequence normalization (already /max_val)
-        seqn_np = np.clip(seqn_np, 0.0, 1.0)
-        seqc_np = np.clip(seqc_np, 0.0, 1.0)
+        #seqn_np = np.clip(seqn_np, 0.0, 1.0)
+        #seqc_np = np.clip(seqc_np, 0.0, 1.0)
 
-    print(f"DEBUG after scaling (sequence): noisy min={float(seqn_np.min()):.6e} max={float(seqn_np.max()):.6e}, "
-          f"clean min={float(seqc_np.min()):.6e} max={float(seqc_np.max()):.6e}")
+    #print(f"DEBUG after scaling (sequence): noisy min={float(seqn_np.min()):.6e} max={float(seqn_np.max()):.6e}, "
+          #f"clean min={float(seqc_np.min()):.6e} max={float(seqc_np.max()):.6e}")
 
     # move to device
-    seqn = torch.from_numpy(seqn_np).to(device)
-    seqc = torch.from_numpy(seqc_np).to(device)
+    #seqn = torch.from_numpy(seqn_np).to(device)
+    #seqc = torch.from_numpy(seqc_np).to(device)
 
     radius = (NUM_IN_FR_EXT - 1) // 2
     denoised_frames = []
@@ -217,12 +240,8 @@ def main(**args):
     print(f"DEBUG denoised range: min={den_min:.6e}, max={den_max:.6e}")
     print(f"DEBUG noisy range:    min={seqn_min:.6e}, max={seqn_max:.6e}")
 
-    if den_min < -1e-3 or den_max > 1.0 + 1e-6:
-        print("Model outputs look like residuals -> reconstruct = noisy + denoised")
-        recon = (seqn_cpu + denoised).clamp(0., 1.)
-    else:
-        print("Model outputs look like absolute images -> using denoised directly")
-        recon = denoised.clamp(0., 1.)
+    print("Using model output directly as the denoised image.")
+    recon = denoised.clamp(0., 1.)
 
     # compute PSNR and save previews
     from skimage.metrics import peak_signal_noise_ratio as compare_psnr
