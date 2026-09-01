@@ -14,7 +14,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--blackbody_dir", type=str, required=True,
                         help="dir of raw .tif frames of a static blackbody")
-    parser.add_argument("--save_path", type=str, default="calib/blackbody_noise_map.npy")
+    parser.add_argument("--save_path", type=str, default="calib/blackbody_noise_map_2.npy")
     parser.add_argument("--max_num_fr", type=int, default=800)
     parser.add_argument("--no_abs", action='store_true',
                         help="keep the signed FPN pattern instead of taking abs()")

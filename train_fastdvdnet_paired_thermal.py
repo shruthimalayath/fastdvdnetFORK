@@ -12,7 +12,13 @@ from dataset_val_paired_thermal import PairedValDataset
 #from dataloaders_paired import train_dali_loader
 from dataset_paired_thermal import PairedThermalDataset
 from torch.utils.data import DataLoader
-from utils_thermal import svd_orthogonalization, close_logger, init_logging, normalize_augment_pair
+from utils_thermal import (
+    svd_orthogonalization,
+    close_logger,
+    init_logging,
+    normalize_augment_pair,
+    row_column_structure_loss,
+)
 from train_common_paired_thermal import resume_training, lr_scheduler, log_train_psnr, \
 					validate_and_log, save_model_checkpoint
 
@@ -160,12 +166,33 @@ def main(**args):
 			# Evaluate model and optimize it
 			out_train = model(imgn_train, noise_map)
 
-			# Compute loss
-			loss = criterion(gt_train, out_train) / (N*2)
+			# Compute base MSE and separate row/column residual structure penalties
+			base_loss = criterion(gt_train, out_train) / (N * 2)
+			row_loss = row_column_structure_loss(
+				out_train,
+				gt_train,
+				row_weight=1.0,
+				col_weight=0.0,
+			)
+			col_loss = row_column_structure_loss(
+				out_train,
+				gt_train,
+				row_weight=0.0,
+				col_weight=1.0,
+			)
+			# Total objective: MSE fidelity + row/col variance-style penalties (+ profile-gradient term in helper).
+			spatial_loss = args['row_loss_weight'] * row_loss + args['col_loss_weight'] * col_loss
+			loss = base_loss + spatial_loss
 			loss.backward()
 			optimizer.step()
 			epoch_loss += loss.item()
 			epoch_batches += 1
+
+			if training_params['step'] % args['save_every'] == 0:
+				writer.add_scalar('Loss/mse', base_loss.item(), training_params['step'])
+				writer.add_scalar('Loss/row', row_loss.item(), training_params['step'])
+				writer.add_scalar('Loss/col', col_loss.item(), training_params['step'])
+				writer.add_scalar('Loss/total', loss.item(), training_params['step'])
 
 			# Results
 			if training_params['step'] % args['save_every'] == 0:
@@ -240,6 +267,10 @@ if __name__ == "__main__":
 						orthogonalization")
 	parser.add_argument("--save_every_epochs", type=int, default=5,\
 						help="Number of training epochs to save state")
+	parser.add_argument("--row_loss_weight", type=float, default=1e-3,\
+						help="Weight for the row-structure residual loss")
+	parser.add_argument("--col_loss_weight", type=float, default=1e-3,\
+						help="Weight for the column-structure residual loss")
 
 	#No longer needed because of dynamic noise maps
 	#parser.add_argument("--noise_ival", nargs=2, type=int, default=[5, 55], help="Noise training interval")

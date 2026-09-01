@@ -198,6 +198,92 @@ def batch_psnr(img, imclean, data_range):
 					   data_range=data_range)
 	return psnr/img_cpu.shape[0]
 
+
+def row_column_structure_loss(pred, target, row_weight=1.0, col_weight=1.0, grad_weight=0.2):
+    """Spatial residual regularizer for row/column artifacts.
+
+    Inputs:
+        pred, target: tensors shaped [B, C, H, W]
+    Objective:
+        residual = pred - target
+        row term: variance-style penalty of row-wise residual means
+        col term: variance-style penalty of col-wise residual means
+        grad term: finite-difference smoothness on row/col profiles
+
+    Minimization behavior:
+        - row term reduces horizontal striping bias
+        - col term reduces vertical striping bias
+        - grad term suppresses abrupt row/col jumps
+    """
+    residual = pred - target
+    residual = residual - residual.mean(dim=(-1, -2), keepdim=True)
+
+    row_profile = residual.mean(dim=-1, keepdim=True)  # [B, C, H, 1]
+    col_profile = residual.mean(dim=-2, keepdim=True)  # [B, C, 1, W]
+
+    row_centered = row_profile - row_profile.mean(dim=-2, keepdim=True)
+    col_centered = col_profile - col_profile.mean(dim=-1, keepdim=True)
+
+    row_penalty = row_centered.pow(2).mean()
+    col_penalty = col_centered.pow(2).mean()
+
+    row_grad = (row_profile[..., 1:, :] - row_profile[..., :-1, :]).pow(2).mean()
+    col_grad = (col_profile[..., :, 1:] - col_profile[..., :, :-1]).pow(2).mean()
+
+    return (
+        row_weight * row_penalty
+        + col_weight * col_penalty
+        + grad_weight * (row_grad + col_grad)
+    )
+
+
+def row_column_output_prior_loss(pred, row_weight=1.0, col_weight=1.0, grad_weight=0.2):
+    """Spatial prior on model output only (no target required).
+
+    Inputs:
+        pred: tensor shaped [B, C, H, W]
+    Objective:
+        centered = pred - spatial_mean(pred)
+        row term: variance-style penalty of row-wise centered means
+        col term: variance-style penalty of col-wise centered means
+        grad term: finite-difference smoothness on row/col profiles
+    """
+    centered = pred - pred.mean(dim=(-1, -2), keepdim=True)
+
+    row_profile = centered.mean(dim=-1, keepdim=True)  # [B, C, H, 1]
+    col_profile = centered.mean(dim=-2, keepdim=True)  # [B, C, 1, W]
+
+    row_centered = row_profile - row_profile.mean(dim=-2, keepdim=True)
+    col_centered = col_profile - col_profile.mean(dim=-1, keepdim=True)
+
+    row_penalty = row_centered.pow(2).mean()
+    col_penalty = col_centered.pow(2).mean()
+
+    row_grad = (row_profile[..., 1:, :] - row_profile[..., :-1, :]).pow(2).mean()
+    col_grad = (col_profile[..., :, 1:] - col_profile[..., :, :-1]).pow(2).mean()
+
+    return (
+        row_weight * row_penalty
+        + col_weight * col_penalty
+        + grad_weight * (row_grad + col_grad)
+    )
+
+
+def total_spatial_loss(pred, target, mse_weight=1.0, row_weight=1e-3, col_weight=1e-3, **kwargs):
+    """Combine fidelity and spatial-structure regularization.
+
+    Total loss:
+        mse_weight * MSE(pred, target) + row_column_structure_loss(...)
+
+    Notes:
+        row_weight and col_weight scale the variance-style row/col penalties.
+        grad_weight is passed through kwargs into row_column_structure_loss.
+    """
+    mse = torch.nn.functional.mse_loss(pred, target, reduction='mean')
+    spatial = row_column_structure_loss(pred, target, row_weight=row_weight, col_weight=col_weight, **kwargs)
+    return mse_weight * mse + spatial
+
+
 def variable_to_cv2_image(invar, conv_rgb_to_bgr=True, orig_min=None, orig_max=None, eps=1e-6):
     """Converts a torch tensor to an OpenCV image.
 
