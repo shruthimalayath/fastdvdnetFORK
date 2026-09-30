@@ -1,0 +1,5 @@
+2026-09-30 16:38:10,971 - [seq_38] baseline=70.1804 denoised=75.0279 delta=+4.8475
+2026-09-30 16:38:31,983 - [seq_39] baseline=69.6775 denoised=73.7022 delta=+4.0248
+2026-09-30 16:38:51,807 - [seq_40] baseline=70.4286 denoised=78.0434 delta=+7.6148
+2026-09-30 16:39:08,618 - [seq_41] baseline=70.7624 denoised=76.5496 delta=+5.7873
+2026-09-30 16:39:10,100 - OVERALL baseline=70.2622 denoised=75.8308 delta=+5.5686
